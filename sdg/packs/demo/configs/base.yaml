@@ -1,0 +1,8 @@
+pack: demo
+seed: 7
+reuse_completed: true
+generation:
+  count: 20
+  min_value: 1
+  max_value: 20
+  train_fraction: 0.8

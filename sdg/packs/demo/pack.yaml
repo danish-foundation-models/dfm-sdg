@@ -1,0 +1,7 @@
+name: demo
+description: Tiny arithmetic demo pack for Phase 0 bootstrapping.
+entrypoints:
+  build: sdg.packs.demo.build:build
+  verify: sdg.packs.demo.build:verify
+  summarize: sdg.packs.demo.build:summarize
+  publish: sdg.packs.demo.build:publish

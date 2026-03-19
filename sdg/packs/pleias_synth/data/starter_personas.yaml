@@ -1,0 +1,125 @@
+- persona_id: curious_student
+  name: Curious Student
+  intent: understand a topic well enough to explain it back simply
+  knowledge_level: beginner
+  tone: direct and plain
+  question_style: exploratory question
+  answer_granularity: short explanation with the main point and a little context
+  constraints:
+    - avoid unnecessary jargon
+    - do not mention the article title unless natural
+  preferred_angles:
+    - overview
+    - explanation
+    - clarification
+  tags:
+    - education
+    - general
+
+- persona_id: journalist
+  name: Journalist
+  intent: quickly understand the core of something and the details that matter
+  knowledge_level: informed generalist
+  tone: neutral and concise
+  question_style: situational question with follow-up needs
+  answer_granularity: concise answer with the main points a reader would need
+  constraints:
+    - emphasize verifiable facts
+    - keep the question practical rather than academic
+  preferred_angles:
+    - overview
+    - timeline
+    - clarification
+  tags:
+    - verification
+    - news
+
+- persona_id: quiz_writer
+  name: Quiz Writer
+  intent: create a memorable recall prompt
+  knowledge_level: broad general knowledge
+  tone: crisp and clue-oriented
+  question_style: indirect clue question
+  answer_granularity: named entity or short phrase
+  constraints:
+    - prefer clue-like wording
+    - avoid leaking the answer
+  preferred_angles:
+    - identification
+    - clarification
+    - lookup
+  tags:
+    - trivia
+    - recall
+
+- persona_id: research_assistant
+  name: Research Assistant
+  intent: gather a compact, useful summary for downstream notes
+  knowledge_level: detail-oriented
+  tone: precise and efficient
+  question_style: scoped research question
+  answer_granularity: compact answer that covers the key factual points
+  constraints:
+    - stay tightly grounded
+    - keep prompts operational
+  preferred_angles:
+    - overview
+    - timeline
+    - comparison
+  tags:
+    - research
+    - structured
+
+- persona_id: curious_child
+  name: Curious Child
+  intent: ask what something is, what is going on, and why it matters
+  knowledge_level: novice
+  tone: simple and concrete
+  question_style: plain-language help question
+  answer_granularity: simple answer with a little extra explanation
+  constraints:
+    - use simple wording
+    - avoid dense terminology when possible
+  preferred_angles:
+    - explanation
+    - overview
+    - clarification
+  tags:
+    - simple
+    - beginner
+
+- persona_id: domain_peer
+  name: Domain Peer
+  intent: clarify a point quickly without losing the wider context
+  knowledge_level: advanced
+  tone: terse and informed
+  question_style: targeted but context-aware question
+  answer_granularity: direct answer with any necessary distinction or context
+  constraints:
+    - avoid beginner tutorial framing
+    - prefer specificity
+  preferred_angles:
+    - comparison
+    - clarification
+    - lookup
+  tags:
+    - expert
+    - precision
+
+- persona_id: editor
+  name: Editor
+  intent: disambiguate what matters and surface the key identifying context
+  knowledge_level: informed
+  tone: practical and neutral
+  question_style: disambiguating question
+  answer_granularity: concise answer with the key identifying detail and context
+  constraints:
+    - prefer details that separate similar entities
+    - keep prompts compact but not cryptic
+  preferred_angles:
+    - identification
+    - clarification
+    - comparison
+  tags:
+    - editing
+    - disambiguation

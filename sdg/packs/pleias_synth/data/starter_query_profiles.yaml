@@ -1,0 +1,144 @@
+- profile_id: clean_reference
+  name: Clean Reference
+  weight: 3
+  channel: chat
+  fluency: native_or_unspecified
+  register: neutral
+  urgency: normal
+  query_shape: full_question
+  noise_level: none
+  instructions: Write a normal well-formed question with standard spelling and punctuation.
+  exemplars:
+    - "When was this painted?"
+    - "Who coined this term?"
+    - "What movement is this associated with?"
+  tags:
+    - clean
+    - baseline
+
+- profile_id: casual_mobile
+  name: Casual Mobile
+  weight: 2
+  channel: mobile_chat
+  fluency: native_or_unspecified
+  register: casual
+  urgency: quick
+  query_shape: short_question
+  noise_level: light
+  instructions: Sound like a quick everyday phone query. It can be a little informal or lightly unpolished, but it should still read naturally.
+  exemplars:
+    - "what year was this made"
+    - "who was this again?"
+    - "what style is this painting"
+  tags:
+    - casual
+    - mobile
+
+- profile_id: contextual_help
+  name: Contextual Help
+  weight: 3
+  channel: chat
+  fluency: native_or_unspecified
+  register: natural
+  urgency: normal
+  query_shape: conversational
+  noise_level: none
+  instructions: Sound like someone who has a practical or understanding-oriented need and is asking for a grounded, useful answer with a bit of context.
+  exemplars:
+    - "I'm trying to understand what this movement was really about and why it mattered. Can you explain the main idea?"
+    - "Can you give me the important points and timing here so I can make sense of it?"
+    - "I know the name but not the context. What should I know about it?"
+  tags:
+    - contextual
+    - broad
+
+- profile_id: messy_contextual_chat
+  name: Messy Contextual Chat
+  weight: 2
+  channel: mobile_chat
+  fluency: native_or_unspecified
+  register: casual
+  urgency: normal
+  query_shape: conversational
+  noise_level: light
+  instructions: Sound like a real chat ask with a goal, a little messiness, and more than one clause. It can be informal, slightly rambling, or lightly unpolished, but should still be realistic.
+  exemplars:
+    - "hi im trying to remember what this film is actually about, not just who made it, can you give me the main idea?"
+    - "i keep seeing this term but dont really get what it means or why people care about it, can u explain?"
+    - "can you help me place this in context a bit, like what it was and what mattered most about it?"
+  tags:
+    - contextual
+    - chat
+    - messy
+
+- profile_id: hurried_typo_light
+  name: Hurried Typo Light
+  weight: 1
+  channel: mobile_chat
+  fluency: native_or_unspecified
+  register: casual
+  urgency: rushed
+  query_shape: short_question
+  noise_level: light_typo
+  instructions: Sound slightly rushed. If you introduce noise, keep it to one small realistic typo or omission at most.
+  exemplars:
+    - "what yera was this painted"
+    - "who first used this term again"
+    - "which movie was that based on clarke story"
+  tags:
+    - rushed
+    - typo_light
+
+- profile_id: search_fragment
+  name: Search Fragment
+  weight: 1
+  channel: search_box
+  fluency: native_or_unspecified
+  register: clipped
+  urgency: quick_lookup
+  query_shape: fragment
+  noise_level: none
+  instructions: Make it look like a search-box fragment or clipped lookup, not a polished full sentence.
+  exemplars:
+    - "seurat painting pointillism movement"
+    - "kubrick clarke short stories film title"
+    - "abstract expressionism term 1946 who"
+  tags:
+    - search
+    - fragment
+
+- profile_id: non_native_light
+  name: Non Native Light
+  weight: 1
+  channel: chat
+  fluency: fluent_non_native
+  register: simple
+  urgency: normal
+  query_shape: full_question
+  noise_level: light_grammar
+  instructions: Sound like a fluent non-native English speaker with slightly simplified grammar. Do not caricature or overdo mistakes.
+  exemplars:
+    - "What is title of this movie?"
+    - "In which years this painting was made?"
+    - "Who first use this term for American art?"
+  tags:
+    - non_native
+    - simple
+
+- profile_id: polite_memory_probe
+  name: Polite Memory Probe
+  weight: 1
+  channel: chat
+  fluency: native_or_unspecified
+  register: polite
+  urgency: relaxed
+  query_shape: conversational
+  noise_level: none
+  instructions: Sound a bit more conversational and polite, like someone asking for help remembering a fact.
+  exemplars:
+    - "Can you help me remember when this was painted?"
+    - "Could you remind me who first used that term?"
+    - "I'm trying to remember which film that was."
+  tags:
+    - polite
+    - conversational
