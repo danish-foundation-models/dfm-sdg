@@ -2,74 +2,55 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from sdg.packs.pleias_synth.record_loader import load_record, load_source_config
+from sdg.packs.pleias_synth.record_loader import load_record_source
 from sdg.packs.pleias_synth.types import AssistantStyle, Record
 
 DATA_DIR = Path(__file__).resolve().parent / "data"
+PRESETS = {"starter": DATA_DIR / "starter_assistant_styles.yaml"}
 
 
 def load_assistant_style(cfg: Record) -> AssistantStyle:
-    style_config = load_source_config(
+    source, record = load_record_source(
         cfg,
         key="assistant_style",
         label="assistant style",
-        default_preset="starter",
+        presets=PRESETS,
         aliases=("assistant_styles",),
-        allow_item=True,
     )
-    match style_config["source"]:
-        case "preset":
-            preset = style_config["preset"]
-            assert preset == "starter", f"Unknown assistant style preset: {preset}"
-            source = f"preset:{preset}"
-            record = load_record(
-                DATA_DIR / "starter_assistant_styles.yaml",
-                label="assistant style preset",
-            )
-        case "inline":
-            source = "inline"
-            records = style_config["records"]
-            assert len(records) == 1, "assistant style inline config must contain exactly one record"
-            record = records[0]
-        case "path":
-            path = style_config["path"]
-            source = str(path)
-            record = load_record(path, label="assistant style file")
-        case _:
-            raise AssertionError(f"Unknown assistant style source: {style_config['source']}")
-
     return _normalize_assistant_style(record, source=source)
 
 
 def _normalize_assistant_style(record: Record, *, source: str) -> AssistantStyle:
-    tags = record.get("tags", [])
-    exemplars = record.get("exemplars", [])
-    meta = record.get("meta", {})
-
-    assert isinstance(tags, list), "assistant style tags must be a list"
-    assert isinstance(exemplars, list), "assistant style exemplars must be a list"
-    assert isinstance(meta, dict), "assistant style meta must be a mapping"
-
-    style_id = str(record.get("style_id") or "assistant-style")
-
     return {
-        "style_id": style_id,
+        "style_id": _required_str(record, "style_id", label="assistant style style_id"),
         "source": source,
-        "name": str(record.get("name") or style_id),
-        "tone": str(record.get("tone") or "neutral"),
-        "detail_level": str(record.get("detail_level") or "balanced"),
-        "structure": str(record.get("structure") or "plain paragraphs"),
-        "voice": str(record.get("voice") or "helpful and factual"),
-        "formatting_style": str(
-            record.get("formatting_style")
-            or "plain text with minimal formatting"
-        ),
-        "punctuation_style": str(
-            record.get("punctuation_style")
-            or "standard punctuation with minimal flourish"
-        ),
-        "instructions": str(record.get("instructions") or "Answer clearly and directly."),
-        "exemplars": [str(item) for item in exemplars if str(item).strip()],
-        "tags": [str(item) for item in tags],
-        "meta": dict(meta),
+        "name": _required_str(record, "name", label="assistant style name"),
+        "tone": _required_str(record, "tone", label="assistant style tone"),
+        "detail_level": _required_str(record, "detail_level", label="assistant style detail_level"),
+        "structure": _required_str(record, "structure", label="assistant style structure"),
+        "voice": _required_str(record, "voice", label="assistant style voice"),
+        "formatting_style": _required_str(record, "formatting_style", label="assistant style formatting_style"),
+        "punctuation_style": _required_str(record, "punctuation_style", label="assistant style punctuation_style"),
+        "instructions": _required_str(record, "instructions", label="assistant style instructions"),
+        "exemplars": _string_list(record, "exemplars", label="assistant style exemplars"),
+        "tags": _string_list(record, "tags", label="assistant style tags"),
+        "meta": _meta(record, label="assistant style meta"),
     }
+
+
+def _required_str(record: Record, key: str, *, label: str) -> str:
+    value = record.get(key)
+    assert isinstance(value, str) and value, f"{label} must be a non-empty string"
+    return value
+
+
+def _string_list(record: Record, key: str, *, label: str) -> list[str]:
+    value = record.get(key, [])
+    assert isinstance(value, list), f"{label} must be a list"
+    return [str(item) for item in value if str(item).strip()]
+
+
+def _meta(record: Record, *, label: str) -> Record:
+    value = record.get("meta", {})
+    assert isinstance(value, dict), f"{label} must be a mapping"
+    return dict(value)

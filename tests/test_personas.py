@@ -18,7 +18,7 @@ def test_starter_personas_load_by_default() -> None:
 def test_personas_can_load_from_external_jsonl(tmp_path) -> None:
     persona_path = tmp_path / "personas.jsonl"
     persona_path.write_text(
-        '{"persona_id":"archivist","name":"Archivist","intent":"recover a precise fact","preferred_angles":["attribute_lookup"]}\n'
+        '{"persona_id":"archivist","name":"Archivist","intent":"recover a precise fact","knowledge_level":"expert","tone":"direct","question_style":"targeted","answer_granularity":"short factual answer","preferred_angles":["attribute_lookup"]}\n'
     )
 
     cfg = {
@@ -41,8 +41,20 @@ def test_personas_can_load_from_external_jsonl(tmp_path) -> None:
 def test_query_plans_carry_persona_and_angle() -> None:
     cfg = {"generation": {"memorization": {}}}
     fact_bundles = [
-        {"doc": {"id": "a", "title": "Alpha", "text": "Alpha is first."}, "sentence": "Alpha is first.", "sentence_index": 0},
-        {"doc": {"id": "b", "title": "Beta", "text": "Beta is second."}, "sentence": "Beta is second.", "sentence_index": 0},
+        {
+            "doc": {"id": "a", "title": "Alpha", "text": "Alpha is first."},
+            "primary_sentence": "Alpha is first.",
+            "sentence_index": 0,
+            "support_sentences": [],
+            "structured_facts": [],
+        },
+        {
+            "doc": {"id": "b", "title": "Beta", "text": "Beta is second."},
+            "primary_sentence": "Beta is second.",
+            "sentence_index": 0,
+            "support_sentences": [],
+            "structured_facts": [],
+        },
     ]
 
     plans = build_query_plans(fact_bundles, cfg, seed=3)
@@ -80,6 +92,11 @@ def test_assistant_style_can_load_from_external_yaml(tmp_path: Path) -> None:
                 "style_id: custom_assistant",
                 "name: Custom Assistant",
                 "tone: precise",
+                "detail_level: concise",
+                "structure: lead with the answer",
+                "voice: factual",
+                "formatting_style: minimal formatting",
+                "punctuation_style: standard punctuation",
                 "instructions: Answer directly.",
             ]
         )
@@ -101,18 +118,23 @@ def test_assistant_style_can_load_from_external_yaml(tmp_path: Path) -> None:
     assert style["source"] == str(style_path)
 
 
-def test_assistant_style_inline_items_accepts_single_record_list() -> None:
+def test_assistant_style_inline_item_loads_single_record() -> None:
     cfg = {
         "generation": {
             "memorization": {
                 "assistant_style": {
                     "source": "inline",
-                    "items": [
-                        {
-                            "style_id": "inline_assistant",
-                            "instructions": "Answer directly.",
-                        }
-                    ],
+                    "item": {
+                        "style_id": "inline_assistant",
+                        "name": "Inline Assistant",
+                        "tone": "direct",
+                        "detail_level": "concise",
+                        "structure": "lead with the answer",
+                        "voice": "factual",
+                        "formatting_style": "minimal formatting",
+                        "punctuation_style": "standard punctuation",
+                        "instructions": "Answer directly.",
+                    },
                 }
             }
         }

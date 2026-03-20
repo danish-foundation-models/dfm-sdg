@@ -3,38 +3,20 @@ from __future__ import annotations
 from pathlib import Path
 from random import Random
 
-from sdg.packs.pleias_synth.record_loader import load_records, load_source_config
+from sdg.packs.pleias_synth.record_loader import load_records_source
 from sdg.packs.pleias_synth.types import QueryProfile, Record
 
 DATA_DIR = Path(__file__).resolve().parent / "data"
+PRESETS = {"starter": DATA_DIR / "starter_query_profiles.yaml"}
 
 
 def load_query_profiles(cfg: Record) -> list[QueryProfile]:
-    profiles_config = load_source_config(
+    source, records = load_records_source(
         cfg,
         key="query_profiles",
         label="query profile",
-        default_preset="starter",
+        presets=PRESETS,
     )
-    match profiles_config["source"]:
-        case "preset":
-            preset = profiles_config["preset"]
-            assert preset == "starter", f"Unknown query profile preset: {preset}"
-            source = f"preset:{preset}"
-            records = load_records(
-                DATA_DIR / "starter_query_profiles.yaml",
-                label="query profile preset",
-            )
-        case "inline":
-            source = "inline"
-            records = profiles_config["records"]
-        case "path":
-            path = profiles_config["path"]
-            source = str(path)
-            records = load_records(path, label="query profile file")
-        case _:
-            raise AssertionError(f"Unknown query profile source: {profiles_config['source']}")
-
     return _normalize_query_profiles(records, source=source)
 
 
@@ -44,49 +26,63 @@ def assign_query_profiles(
     *,
     seed: int | None,
 ) -> list[QueryProfile]:
+    weighted_profiles = load_weighted_query_profiles(cfg, seed=seed)
+    return [weighted_profiles[index % len(weighted_profiles)] for index in range(count)]
+
+
+def load_weighted_query_profiles(cfg: Record, *, seed: int | None) -> list[QueryProfile]:
     profiles = load_query_profiles(cfg)
     assert profiles, "No query profiles available for memorization generation"
 
     weighted_profiles = [profile for profile in profiles for _ in range(profile["weight"])]
-
     rng = Random(0 if seed is None else seed)
     rng.shuffle(weighted_profiles)
-
-    return [weighted_profiles[index % len(weighted_profiles)] for index in range(count)]
+    return weighted_profiles
 
 
 def _normalize_query_profiles(records: list[Record], *, source: str) -> list[QueryProfile]:
     normalized: list[QueryProfile] = []
-    for index, record in enumerate(records):
-        tags = record.get("tags", [])
-        exemplars = record.get("exemplars", [])
-        meta = record.get("meta", {})
-        weight = record.get("weight", 1)
-
-        assert isinstance(tags, list), "query profile tags must be a list"
-        assert isinstance(exemplars, list), "query profile exemplars must be a list"
-        assert isinstance(meta, dict), "query profile meta must be a mapping"
-        assert isinstance(weight, int), "query profile weight must be an integer"
-        assert weight > 0, "query profile weight must be positive"
-
-        profile_id = str(record.get("profile_id") or f"profile-{index:03d}")
-
+    for record in records:
         normalized.append(
             {
-                "profile_id": profile_id,
+                "profile_id": _required_str(record, "profile_id", label="query profile profile_id"),
                 "source": source,
-                "name": str(record.get("name") or profile_id),
-                "weight": weight,
-                "channel": str(record.get("channel") or "chat"),
-                "fluency": str(record.get("fluency") or "native_or_unspecified"),
-                "register": str(record.get("register") or "neutral"),
-                "urgency": str(record.get("urgency") or "normal"),
-                "query_shape": str(record.get("query_shape") or "full_question"),
-                "noise_level": str(record.get("noise_level") or "none"),
-                "instructions": str(record.get("instructions") or "Write a normal user query."),
-                "exemplars": [str(item) for item in exemplars if str(item).strip()],
-                "tags": [str(item) for item in tags],
-                "meta": dict(meta),
+                "name": _required_str(record, "name", label="query profile name"),
+                "weight": _positive_int(record, "weight", label="query profile weight"),
+                "channel": _required_str(record, "channel", label="query profile channel"),
+                "fluency": _required_str(record, "fluency", label="query profile fluency"),
+                "register": _required_str(record, "register", label="query profile register"),
+                "urgency": _required_str(record, "urgency", label="query profile urgency"),
+                "query_shape": _required_str(record, "query_shape", label="query profile query_shape"),
+                "noise_level": _required_str(record, "noise_level", label="query profile noise_level"),
+                "instructions": _required_str(record, "instructions", label="query profile instructions"),
+                "exemplars": _string_list(record, "exemplars", label="query profile exemplars"),
+                "tags": _string_list(record, "tags", label="query profile tags"),
+                "meta": _meta(record, label="query profile meta"),
             }
         )
     return normalized
+
+
+def _required_str(record: Record, key: str, *, label: str) -> str:
+    value = record.get(key)
+    assert isinstance(value, str) and value, f"{label} must be a non-empty string"
+    return value
+
+
+def _positive_int(record: Record, key: str, *, label: str) -> int:
+    value = record.get(key)
+    assert isinstance(value, int) and value > 0, f"{label} must be a positive integer"
+    return value
+
+
+def _string_list(record: Record, key: str, *, label: str) -> list[str]:
+    value = record.get(key, [])
+    assert isinstance(value, list), f"{label} must be a list"
+    return [str(item) for item in value if str(item).strip()]
+
+
+def _meta(record: Record, *, label: str) -> Record:
+    value = record.get("meta", {})
+    assert isinstance(value, dict), f"{label} must be a mapping"
+    return dict(value)

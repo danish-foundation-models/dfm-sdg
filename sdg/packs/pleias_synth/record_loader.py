@@ -13,9 +13,14 @@ class PresetSourceConfig(TypedDict):
     preset: str
 
 
-class InlineSourceConfig(TypedDict):
+class InlineRecordSourceConfig(TypedDict):
     source: Literal["inline"]
-    records: list[Record]
+    item: Record
+
+
+class InlineRecordsSourceConfig(TypedDict):
+    source: Literal["inline"]
+    items: list[Record]
 
 
 class PathSourceConfig(TypedDict):
@@ -23,7 +28,8 @@ class PathSourceConfig(TypedDict):
     path: Path
 
 
-SourceConfig = PresetSourceConfig | InlineSourceConfig | PathSourceConfig
+SingleRecordSourceConfig = PresetSourceConfig | InlineRecordSourceConfig | PathSourceConfig
+RecordListSourceConfig = PresetSourceConfig | InlineRecordsSourceConfig | PathSourceConfig
 
 
 def load_record(path: Path, *, label: str) -> Record:
@@ -34,38 +40,102 @@ def load_records(path: Path, *, label: str) -> list[Record]:
     return as_records(_load_path_data(path), label=f"{label} at {path}")
 
 
-def load_source_config(
+def load_record_source(
+    cfg: Record,
+    *,
+    key: str,
+    label: str,
+    presets: dict[str, Path],
+    aliases: tuple[str, ...] = (),
+) -> tuple[str, Record]:
+    source_config = load_single_source_config(
+        cfg,
+        key=key,
+        label=label,
+        default_preset=_default_preset(presets),
+        aliases=aliases,
+    )
+    return _resolve_record_source(source_config, label=label, presets=presets)
+
+
+def load_records_source(
+    cfg: Record,
+    *,
+    key: str,
+    label: str,
+    presets: dict[str, Path],
+    aliases: tuple[str, ...] = (),
+) -> tuple[str, list[Record]]:
+    source_config = load_record_list_source_config(
+        cfg,
+        key=key,
+        label=label,
+        default_preset=_default_preset(presets),
+        aliases=aliases,
+    )
+    return _resolve_records_source(source_config, label=label, presets=presets)
+
+
+def load_single_source_config(
     cfg: Record,
     *,
     key: str,
     label: str,
     default_preset: str,
     aliases: tuple[str, ...] = (),
-    allow_item: bool = False,
-) -> SourceConfig:
+) -> SingleRecordSourceConfig:
     raw_config = _raw_source_config(cfg, key=key, label=label, aliases=aliases)
     if raw_config is None:
         return {"source": "preset", "preset": default_preset}
 
-    source = raw_config.get("source", "preset")
-    assert isinstance(source, str), f"{label} source must be a string"
+    source = _required_str(raw_config, "source", label=f"{label} source")
 
     match source:
         case "preset":
-            preset = raw_config.get("preset", default_preset)
-            assert isinstance(preset, str) and preset, f"{label} preset must be a non-empty string"
-            return {"source": "preset", "preset": preset}
+            return {
+                "source": "preset",
+                "preset": _required_str(raw_config, "preset", label=f"{label} preset"),
+            }
         case "inline":
             return {
                 "source": "inline",
-                "records": _inline_records(raw_config, label=label, allow_item=allow_item),
+                "item": one_record(_required_value(raw_config, "item", label=f"{label} inline item"), label=label),
             }
         case "path":
-            raw_path = raw_config.get("path")
-            assert isinstance(raw_path, str) and raw_path, f"{label} path must be a non-empty string"
-            return {"source": "path", "path": Path(raw_path).expanduser().resolve()}
+            return {"source": "path", "path": _resolve_path(raw_config, label=label)}
         case _:
-            raise ValueError(f"Unsupported {label} source: {source}")
+            raise AssertionError(f"Unsupported {label} source: {source}")
+
+
+def load_record_list_source_config(
+    cfg: Record,
+    *,
+    key: str,
+    label: str,
+    default_preset: str,
+    aliases: tuple[str, ...] = (),
+) -> RecordListSourceConfig:
+    raw_config = _raw_source_config(cfg, key=key, label=label, aliases=aliases)
+    if raw_config is None:
+        return {"source": "preset", "preset": default_preset}
+
+    source = _required_str(raw_config, "source", label=f"{label} source")
+
+    match source:
+        case "preset":
+            return {
+                "source": "preset",
+                "preset": _required_str(raw_config, "preset", label=f"{label} preset"),
+            }
+        case "inline":
+            return {
+                "source": "inline",
+                "items": as_records(_required_value(raw_config, "items", label=f"{label} inline items"), label=label),
+            }
+        case "path":
+            return {"source": "path", "path": _resolve_path(raw_config, label=label)}
+        case _:
+            raise AssertionError(f"Unsupported {label} source: {source}")
 
 
 def one_record(value: object, *, label: str) -> Record:
@@ -82,22 +152,6 @@ def as_records(value: object, *, label: str) -> list[Record]:
     for record in value:
         assert isinstance(record, dict), f"{label} must contain mappings"
     return value
-
-
-def _inline_records(
-    raw_config: Record,
-    *,
-    label: str,
-    allow_item: bool,
-) -> list[Record]:
-    raw_records = raw_config.get("items")
-    if raw_records is not None:
-        return as_records(raw_records, label=label)
-
-    assert allow_item, f"{label} inline config requires items"
-    raw_record = raw_config.get("item")
-    assert raw_record is not None, f"{label} inline config requires item"
-    return [one_record(raw_record, label=label)]
 
 
 def _raw_source_config(
@@ -130,6 +184,46 @@ def _raw_source_config(
     return raw_config
 
 
+def _resolve_record_source(
+    source_config: SingleRecordSourceConfig,
+    *,
+    label: str,
+    presets: dict[str, Path],
+) -> tuple[str, Record]:
+    match source_config["source"]:
+        case "preset":
+            preset = source_config["preset"]
+            path = _preset_path(presets, preset, label=label)
+            return f"preset:{preset}", load_record(path, label=f"{label} preset")
+        case "inline":
+            return "inline", source_config["item"]
+        case "path":
+            path = source_config["path"]
+            return str(path), load_record(path, label=f"{label} file")
+        case _:
+            raise AssertionError(f"Unsupported {label} source: {source_config['source']}")
+
+
+def _resolve_records_source(
+    source_config: RecordListSourceConfig,
+    *,
+    label: str,
+    presets: dict[str, Path],
+) -> tuple[str, list[Record]]:
+    match source_config["source"]:
+        case "preset":
+            preset = source_config["preset"]
+            path = _preset_path(presets, preset, label=label)
+            return f"preset:{preset}", load_records(path, label=f"{label} preset")
+        case "inline":
+            return "inline", source_config["items"]
+        case "path":
+            path = source_config["path"]
+            return str(path), load_records(path, label=f"{label} file")
+        case _:
+            raise AssertionError(f"Unsupported {label} source: {source_config['source']}")
+
+
 def _load_path_data(path: Path) -> object:
     match path.suffix:
         case ".jsonl":
@@ -142,3 +236,30 @@ def _load_path_data(path: Path) -> object:
             return store.read_parquet(path)
         case _:
             raise ValueError(f"Unsupported file format: {path.suffix}")
+
+
+def _resolve_path(raw_config: Record, *, label: str) -> Path:
+    raw_path = _required_str(raw_config, "path", label=f"{label} path")
+    return Path(raw_path).expanduser().resolve()
+
+
+def _preset_path(presets: dict[str, Path], preset: str, *, label: str) -> Path:
+    assert preset in presets, f"Unknown {label} preset: {preset}"
+    return presets[preset]
+
+
+def _default_preset(presets: dict[str, Path]) -> str:
+    assert presets, "presets must not be empty"
+    return next(iter(presets))
+
+
+def _required_value(record: Record, key: str, *, label: str) -> object:
+    value = record.get(key)
+    assert value is not None, f"{label} is required"
+    return value
+
+
+def _required_str(record: Record, key: str, *, label: str) -> str:
+    value = _required_value(record, key, label=label)
+    assert isinstance(value, str) and value, f"{label} must be a non-empty string"
+    return value

@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+from collections.abc import Iterable, Iterator
 from pathlib import Path
 from random import Random
 
 from sdg.packs.pleias_synth.assistant_styles import load_assistant_style
-from sdg.packs.pleias_synth.query_profiles import assign_query_profiles
-from sdg.packs.pleias_synth.record_loader import load_records, load_source_config
+from sdg.packs.pleias_synth.query_profiles import load_weighted_query_profiles
+from sdg.packs.pleias_synth.record_loader import load_records_source
 from sdg.packs.pleias_synth.types import Persona, QueryPlan, Record
 
 DEFAULT_QUERY_ANGLES = [
@@ -20,31 +21,16 @@ DEFAULT_QUERY_ANGLES = [
 ]
 
 DATA_DIR = Path(__file__).resolve().parent / "data"
+PRESETS = {"starter": DATA_DIR / "starter_personas.yaml"}
 
 
 def load_personas(cfg: Record) -> list[Persona]:
-    personas_config = load_source_config(
+    source, records = load_records_source(
         cfg,
         key="personas",
         label="persona",
-        default_preset="starter",
+        presets=PRESETS,
     )
-    match personas_config["source"]:
-        case "preset":
-            preset = personas_config["preset"]
-            assert preset == "starter", f"Unknown persona preset: {preset}"
-            source = f"preset:{preset}"
-            records = load_records(DATA_DIR / "starter_personas.yaml", label="persona preset")
-        case "inline":
-            source = "inline"
-            records = personas_config["records"]
-        case "path":
-            path = personas_config["path"]
-            source = str(path)
-            records = load_records(path, label="persona file")
-        case _:
-            raise AssertionError(f"Unknown persona source: {personas_config['source']}")
-
     return _normalize_personas(records, source=source)
 
 
@@ -54,6 +40,15 @@ def build_query_plans(
     *,
     seed: int | None,
 ) -> list[QueryPlan]:
+    return list(iter_query_plans(fact_bundles, cfg, seed=seed))
+
+
+def iter_query_plans(
+    fact_bundles: Iterable[Record],
+    cfg: Record,
+    *,
+    seed: int | None,
+) -> Iterator[QueryPlan]:
     personas = load_personas(cfg)
     assert personas, "No personas available for memorization generation"
 
@@ -61,24 +56,20 @@ def build_query_plans(
     rng.shuffle(personas)
 
     query_angles = _query_angles(cfg)
-    query_profiles = assign_query_profiles(len(fact_bundles), cfg, seed=seed)
+    query_profiles = load_weighted_query_profiles(cfg, seed=seed)
     assistant_style = load_assistant_style(cfg)
     persona_count = len(personas)
-    plans: list[QueryPlan] = []
     for index, bundle in enumerate(fact_bundles):
         persona = personas[index % persona_count]
         preferred_angles = [angle for angle in persona["preferred_angles"] if angle in query_angles] or query_angles
         angle = preferred_angles[(index // persona_count) % len(preferred_angles)]
-        plans.append(
-            {
-                "bundle": bundle,
-                "persona": persona,
-                "query_angle": angle,
-                "query_profile": query_profiles[index],
-                "assistant_style": assistant_style,
-            }
-        )
-    return plans
+        yield {
+            "bundle": bundle,
+            "persona": persona,
+            "query_angle": angle,
+            "query_profile": query_profiles[index % len(query_profiles)],
+            "assistant_style": assistant_style,
+        }
 
 
 def _query_angles(cfg: Record) -> list[str]:
@@ -101,33 +92,49 @@ def _query_angles(cfg: Record) -> list[str]:
 
 def _normalize_personas(records: list[Record], *, source: str) -> list[Persona]:
     normalized: list[Persona] = []
-    for index, record in enumerate(records):
-        constraints = record.get("constraints", [])
-        tags = record.get("tags", [])
-        preferred_angles = record.get("preferred_angles", DEFAULT_QUERY_ANGLES)
-        meta = record.get("meta", {})
-
-        assert isinstance(constraints, list), "persona constraints must be a list"
-        assert isinstance(tags, list), "persona tags must be a list"
-        assert isinstance(preferred_angles, list), "persona preferred_angles must be a list"
-        assert isinstance(meta, dict), "persona meta must be a mapping"
-
-        persona_id = str(record.get("persona_id") or f"persona-{index:03d}")
-
+    for record in records:
         normalized.append(
             {
-                "persona_id": persona_id,
+                "persona_id": _required_str(record, "persona_id", label="persona persona_id"),
                 "source": source,
-                "name": str(record.get("name") or persona_id),
-                "intent": str(record.get("intent") or "ask a clear factual question"),
-                "knowledge_level": str(record.get("knowledge_level") or "general"),
-                "tone": str(record.get("tone") or "neutral"),
-                "question_style": str(record.get("question_style") or "concise"),
-                "answer_granularity": str(record.get("answer_granularity") or "short answer"),
-                "constraints": [str(item) for item in constraints],
-                "tags": [str(item) for item in tags],
-                "preferred_angles": [str(item) for item in preferred_angles],
-                "meta": dict(meta),
+                "name": _required_str(record, "name", label="persona name"),
+                "intent": _required_str(record, "intent", label="persona intent"),
+                "knowledge_level": _required_str(record, "knowledge_level", label="persona knowledge_level"),
+                "tone": _required_str(record, "tone", label="persona tone"),
+                "question_style": _required_str(record, "question_style", label="persona question_style"),
+                "answer_granularity": _required_str(record, "answer_granularity", label="persona answer_granularity"),
+                "constraints": _string_list(record, "constraints", label="persona constraints"),
+                "tags": _string_list(record, "tags", label="persona tags"),
+                "preferred_angles": _required_string_list(
+                    record,
+                    "preferred_angles",
+                    label="persona preferred_angles",
+                ),
+                "meta": _meta(record, label="persona meta"),
             }
         )
     return normalized
+
+
+def _required_str(record: Record, key: str, *, label: str) -> str:
+    value = record.get(key)
+    assert isinstance(value, str) and value, f"{label} must be a non-empty string"
+    return value
+
+
+def _required_string_list(record: Record, key: str, *, label: str) -> list[str]:
+    values = _string_list(record, key, label=label)
+    assert values, f"{label} must not be empty"
+    return values
+
+
+def _string_list(record: Record, key: str, *, label: str) -> list[str]:
+    value = record.get(key, [])
+    assert isinstance(value, list), f"{label} must be a list"
+    return [str(item) for item in value if str(item).strip()]
+
+
+def _meta(record: Record, *, label: str) -> Record:
+    value = record.get("meta", {})
+    assert isinstance(value, dict), f"{label} must be a mapping"
+    return dict(value)
