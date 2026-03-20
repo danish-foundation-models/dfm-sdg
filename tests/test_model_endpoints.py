@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import threading
+import time
 
 import httpx
 
+import sdg.commons.model as model_module
 from sdg.commons.model import (
     LLM,
     Embedder,
@@ -177,3 +180,117 @@ def test_async_chat_respects_shared_semaphore_limit() -> None:
 
     asyncio.run(run_requests())
     assert transport.max_seen == 1
+
+
+def test_sync_and_async_chat_share_one_concurrency_limit() -> None:
+    class SharedState:
+        def __init__(self) -> None:
+            self.current = 0
+            self.max_seen = 0
+            self.lock = threading.Lock()
+
+        def enter(self) -> None:
+            with self.lock:
+                self.current += 1
+                self.max_seen = max(self.max_seen, self.current)
+
+        def leave(self) -> None:
+            with self.lock:
+                self.current -= 1
+
+    class SyncTransport(httpx.BaseTransport):
+        def __init__(self, state: SharedState) -> None:
+            self.state = state
+
+        def handle_request(self, request: httpx.Request) -> httpx.Response:
+            self.state.enter()
+            time.sleep(0.05)
+            self.state.leave()
+            return httpx.Response(
+                200,
+                json={"choices": [{"message": {"content": '{"target":"ok"}'}}]},
+                request=request,
+            )
+
+    class AsyncTransport(httpx.AsyncBaseTransport):
+        def __init__(self, state: SharedState) -> None:
+            self.state = state
+
+        async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+            self.state.enter()
+            await asyncio.sleep(0.05)
+            self.state.leave()
+            return httpx.Response(
+                200,
+                json={"choices": [{"message": {"content": '{"target":"ok"}'}}]},
+                request=request,
+            )
+
+    state = SharedState()
+    llm = LLM(
+        model="test-model",
+        base_url="https://example.com/v1",
+        max_concurrency=1,
+        transport=SyncTransport(state),
+        async_transport=AsyncTransport(state),
+    )
+
+    async def run_requests() -> None:
+        await asyncio.gather(
+            asyncio.to_thread(llm.chat, [{"role": "user", "content": "sync"}], temperature=0.0),
+            llm.achat([{"role": "user", "content": "async"}], temperature=0.0),
+        )
+
+    asyncio.run(run_requests())
+    assert state.max_seen == 1
+
+
+def test_sync_chat_reuses_httpx_client(monkeypatch) -> None:
+    created = {"count": 0}
+
+    class ReusedClient:
+        def __init__(self, **kwargs) -> None:
+            created["count"] += 1
+
+        def post(self, endpoint: str, json: dict[str, object], headers: dict[str, str]) -> httpx.Response:
+            request = httpx.Request("POST", f"https://example.com{endpoint}")
+            return httpx.Response(
+                200,
+                json={"choices": [{"message": {"content": '{"target":"ok"}'}}]},
+                request=request,
+            )
+
+    monkeypatch.setattr(model_module.httpx, "Client", ReusedClient)
+
+    llm = LLM(model="test-model", base_url="https://example.com/v1")
+    llm.chat([{"role": "user", "content": "one"}], temperature=0.0)
+    llm.chat([{"role": "user", "content": "two"}], temperature=0.0)
+
+    assert created["count"] == 1
+
+
+def test_async_chat_reuses_httpx_client(monkeypatch) -> None:
+    created = {"count": 0}
+
+    class ReusedAsyncClient:
+        def __init__(self, **kwargs) -> None:
+            created["count"] += 1
+
+        async def post(self, endpoint: str, json: dict[str, object], headers: dict[str, str]) -> httpx.Response:
+            request = httpx.Request("POST", f"https://example.com{endpoint}")
+            return httpx.Response(
+                200,
+                json={"choices": [{"message": {"content": '{"target":"ok"}'}}]},
+                request=request,
+            )
+
+    monkeypatch.setattr(model_module.httpx, "AsyncClient", ReusedAsyncClient)
+
+    llm = LLM(model="test-model", base_url="https://example.com/v1")
+
+    async def run_requests() -> None:
+        await llm.achat([{"role": "user", "content": "one"}], temperature=0.0)
+        await llm.achat([{"role": "user", "content": "two"}], temperature=0.0)
+
+    asyncio.run(run_requests())
+    assert created["count"] == 1

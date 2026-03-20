@@ -84,22 +84,27 @@ class EndpointRuntime:
         max_backoff_seconds: float,
         timeout_seconds: float,
     ):
+        self.max_concurrency = max(max_concurrency, 1)
         self.max_retries = max_retries
         self.min_backoff_seconds = min_backoff_seconds
         self.max_backoff_seconds = max_backoff_seconds
         self.timeout_seconds = timeout_seconds
-        self.semaphore = threading.BoundedSemaphore(max(max_concurrency, 1))
         self.lock = threading.Lock()
+        self.in_flight = 0
         self.next_allowed_at = 0.0
 
     def acquire_sync(self) -> None:
-        self.semaphore.acquire()
+        while not self._try_acquire():
+            time.sleep(0.01)
 
     async def acquire_async(self) -> None:
-        await asyncio.to_thread(self.semaphore.acquire)
+        while not self._try_acquire():
+            await asyncio.sleep(0.01)
 
     def release(self) -> None:
-        self.semaphore.release()
+        with self.lock:
+            assert self.in_flight > 0, "Endpoint runtime released more times than acquired"
+            self.in_flight -= 1
 
     def wait_sync(self) -> None:
         while True:
@@ -144,6 +149,13 @@ class EndpointRuntime:
         with self.lock:
             return max(self.next_allowed_at - time.monotonic(), 0.0)
 
+    def _try_acquire(self) -> bool:
+        with self.lock:
+            if self.in_flight >= self.max_concurrency:
+                return False
+            self.in_flight += 1
+            return True
+
 
 class EndpointClient:
     def __init__(
@@ -177,6 +189,9 @@ class EndpointClient:
             max_backoff_seconds=max_backoff_seconds,
             timeout_seconds=timeout_seconds,
         )
+        self._sync_client: httpx.Client | None = None
+        self._async_clients: dict[int, httpx.AsyncClient] = {}
+        self._client_lock = threading.Lock()
 
     def _headers(self) -> dict[str, str]:
         headers = {"Content-Type": "application/json"}
@@ -190,22 +205,49 @@ class EndpointClient:
     def _post_json(self, endpoint: str, payload: dict[str, Any]) -> dict[str, Any]:
         return _post_json(
             runtime=self.runtime,
-            base_url=self.base_url,
+            client=self._sync_http_client(),
             endpoint=endpoint,
             payload=payload,
             headers=self._headers(),
-            transport=self.transport,
         )
 
     async def _apost_json(self, endpoint: str, payload: dict[str, Any]) -> dict[str, Any]:
         return await _apost_json(
             runtime=self.runtime,
-            base_url=self.base_url,
+            client=self._async_http_client(),
             endpoint=endpoint,
             payload=payload,
             headers=self._headers(),
-            transport=self.async_transport,
         )
+
+    def _sync_http_client(self) -> httpx.Client:
+        client = self._sync_client
+        if client is not None:
+            return client
+
+        with self._client_lock:
+            client = self._sync_client
+            if client is None:
+                client = httpx.Client(
+                    base_url=self.base_url,
+                    timeout=self.runtime.timeout_seconds,
+                    transport=self.transport,
+                )
+                self._sync_client = client
+        return client
+
+    def _async_http_client(self) -> httpx.AsyncClient:
+        loop_id = id(asyncio.get_running_loop())
+        with self._client_lock:
+            client = self._async_clients.get(loop_id)
+            if client is None:
+                client = httpx.AsyncClient(
+                    base_url=self.base_url,
+                    timeout=self.runtime.timeout_seconds,
+                    transport=self.async_transport,
+                )
+                self._async_clients[loop_id] = client
+        return client
 
 
 class LLM(EndpointClient):
@@ -450,19 +492,17 @@ def _resolve_client_spec(
 def _post_json(
     *,
     runtime: EndpointRuntime,
-    base_url: str,
+    client: httpx.Client,
     endpoint: str,
     payload: dict[str, Any],
     headers: dict[str, str],
-    transport: httpx.BaseTransport | None,
 ) -> dict[str, Any]:
     for attempt in range(runtime.max_retries + 1):
         runtime.wait_sync()
         runtime.acquire_sync()
         try:
             runtime.wait_sync()
-            with httpx.Client(base_url=base_url, timeout=runtime.timeout_seconds, transport=transport) as client:
-                response = client.post(endpoint, json=payload, headers=headers)
+            response = client.post(endpoint, json=payload, headers=headers)
             if response.status_code == 429:
                 delay = runtime.retry_delay(response.headers, attempt=attempt)
                 runtime.extend_backoff(delay)
@@ -481,19 +521,17 @@ def _post_json(
 async def _apost_json(
     *,
     runtime: EndpointRuntime,
-    base_url: str,
+    client: httpx.AsyncClient,
     endpoint: str,
     payload: dict[str, Any],
     headers: dict[str, str],
-    transport: httpx.AsyncBaseTransport | None,
 ) -> dict[str, Any]:
     for attempt in range(runtime.max_retries + 1):
         await runtime.wait_async()
         await runtime.acquire_async()
         try:
             await runtime.wait_async()
-            async with httpx.AsyncClient(base_url=base_url, timeout=runtime.timeout_seconds, transport=transport) as client:
-                response = await client.post(endpoint, json=payload, headers=headers)
+            response = await client.post(endpoint, json=payload, headers=headers)
             if response.status_code == 429:
                 delay = runtime.retry_delay(response.headers, attempt=attempt)
                 runtime.extend_backoff(delay)
