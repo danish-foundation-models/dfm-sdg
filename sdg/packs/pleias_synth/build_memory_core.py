@@ -1,25 +1,26 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
 
 from sdg.commons import Artifact, store
 from sdg.commons.utils import write_json
 from sdg.packs.pleias_synth.sources import load_sources
 
 
+class ChunkSettings(TypedDict):
+    size: int
+    overlap: int
+
+
 def build_memory_core(cfg: dict[str, Any], outputs_dir: Path) -> dict[str, Any]:
     docs = load_sources(cfg)
     cleaned_docs = clean_corpus(docs)
     sections = sectionize(cleaned_docs)
-    memory_cfg = cfg.get("memory_core", {})
-    chunks = chunk_docs(
-        sections,
-        memory_cfg.get("chunk_size", 80),
-        memory_cfg.get("chunk_overlap", 20),
-    )
+    chunk_settings = _chunk_settings(cfg)
+    chunks = chunk_docs(sections, chunk_settings["size"], chunk_settings["overlap"])
     enriched_chunks = enrich_entities(chunks, cleaned_docs)
-    index = build_index(enriched_chunks, embedder=None)
+    index = build_index(enriched_chunks)
     source_table = _make_source_table(cleaned_docs)
     artifacts = write_memory_core(enriched_chunks, source_table, index, outputs_dir)
 
@@ -31,6 +32,8 @@ def build_memory_core(cfg: dict[str, Any], outputs_dir: Path) -> dict[str, Any]:
         "source_table": source_table,
         "artifacts": artifacts,
     }
+
+
 def clean_corpus(docs: list[dict[str, Any]]) -> list[dict[str, Any]]:
     cleaned_docs: list[dict[str, Any]] = []
     for doc in docs:
@@ -55,9 +58,9 @@ def sectionize(docs: list[dict[str, Any]]) -> list[dict[str, Any]]:
                     "title": doc["title"],
                     "text": text,
                     "source": doc["source"],
-                    "url": doc.get("url"),
+                    "url": doc["url"],
                     "license": doc["license"],
-                    "meta": dict(doc.get("meta") or {}),
+                    "meta": dict(doc["meta"]),
                 }
             )
     return sections
@@ -65,7 +68,7 @@ def sectionize(docs: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def chunk_docs(sections: list[dict[str, Any]], size: int, overlap: int) -> list[dict[str, Any]]:
     chunks: list[dict[str, Any]] = []
-    step = max(size - overlap, 1)
+    step = size - overlap
 
     for section in sections:
         words = section["text"].split()
@@ -87,9 +90,9 @@ def chunk_docs(sections: list[dict[str, Any]], size: int, overlap: int) -> list[
                     "title": section["title"],
                     "text": " ".join(window),
                     "source": section["source"],
-                    "url": section.get("url"),
+                    "url": section["url"],
                     "license": section["license"],
-                    "meta": {**dict(section.get("meta") or {}), "word_count": len(window)},
+                    "meta": {**dict(section["meta"]), "word_count": len(window)},
                 }
             )
             chunk_index += 1
@@ -105,29 +108,27 @@ def enrich_entities(chunks: list[dict[str, Any]], docs: list[dict[str, Any]]) ->
     enriched: list[dict[str, Any]] = []
     for chunk in chunks:
         entity_candidates = [word for word in chunk["title"].split() if word[:1].isupper()]
-        meta = dict(chunk.get("meta") or {})
+        meta = dict(chunk["meta"])
         meta["entity_candidates"] = entity_candidates
-        doc_meta = dict(doc_lookup[chunk["doc_id"]].get("meta") or {})
-        if doc_meta.get("wikidata"):
+        doc_meta = dict(doc_lookup[chunk["doc_id"]]["meta"])
+        if "wikidata" in doc_meta:
             meta["wikidata"] = doc_meta["wikidata"]
-        if doc_meta.get("wikidata_id"):
+        if "wikidata_id" in doc_meta:
             meta["wikidata_id"] = doc_meta["wikidata_id"]
-        if doc_meta.get("structured_wikipedia"):
+        if "structured_wikipedia" in doc_meta:
             meta["structured_wikipedia"] = doc_meta["structured_wikipedia"]
         enriched.append({**chunk, "meta": meta})
     return enriched
 
 
-def build_index(chunks: list[dict[str, Any]], embedder: Any) -> dict[str, Any]:
-    del embedder
-
+def build_index(chunks: list[dict[str, Any]]) -> dict[str, Any]:
     return {
         "type": "lexical-v1",
         "chunks": {
             chunk["id"]: {
                 "title": chunk["title"],
                 "tokens": sorted(set(chunk["text"].lower().split()))[:128],
-                "url": chunk.get("url"),
+                "url": chunk["url"],
             }
             for chunk in chunks
         },
@@ -190,9 +191,23 @@ def _make_source_table(docs: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "source_id": doc["id"],
             "title": doc["title"],
             "source": doc["source"],
-            "url": doc.get("url"),
+            "url": doc["url"],
             "license": doc["license"],
-            "meta": dict(doc.get("meta") or {}),
+            "meta": dict(doc["meta"]),
         }
         for doc in docs
     ]
+
+
+def _chunk_settings(cfg: dict[str, Any]) -> ChunkSettings:
+    memory_cfg = cfg.get("memory_core")
+    if memory_cfg is None:
+        return {"size": 80, "overlap": 20}
+
+    assert isinstance(memory_cfg, dict), "memory_core config must be a mapping"
+    size = memory_cfg.get("chunk_size", 80)
+    overlap = memory_cfg.get("chunk_overlap", 20)
+    assert isinstance(size, int) and size > 0, "memory_core chunk_size must be a positive integer"
+    assert isinstance(overlap, int) and overlap >= 0, "memory_core chunk_overlap must be a non-negative integer"
+    assert overlap < size, "memory_core chunk_overlap must be smaller than chunk_size"
+    return {"size": size, "overlap": overlap}
