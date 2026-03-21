@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from sdg.commons.registry import find_pack_for_path, list_packs, load_pack
-from sdg.commons.run import compare, load, read_events
+from sdg.commons.run import compare, load, progress, read_events
 from sdg.commons.utils import read_yaml
 
 
@@ -31,6 +31,13 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "events":
         return _run_events(args.target, component=args.component, limit=args.limit)
+
+    if args.command == "progress":
+        return _run_progress(
+            args.target,
+            include_model_events=args.include_model_events,
+            limit=args.limit,
+        )
 
     if args.command == "list-packs":
         for pack_name in list_packs():
@@ -66,6 +73,11 @@ def _build_parser() -> argparse.ArgumentParser:
     events_parser.add_argument("target")
     events_parser.add_argument("--component")
     events_parser.add_argument("--limit", type=int)
+
+    progress_parser = subparsers.add_parser("progress")
+    progress_parser.add_argument("target")
+    progress_parser.add_argument("--include-model-events", action="store_true")
+    progress_parser.add_argument("--limit", type=int, default=20)
 
     subparsers.add_parser("list-packs")
 
@@ -121,6 +133,11 @@ def _run_compare(left: str, right: str) -> int:
 
 def _run_events(target: str, *, component: str | None, limit: int | None) -> int:
     _print_json({"events": read_events(target, component=component, limit=limit)})
+    return 0
+
+
+def _run_progress(target: str, *, include_model_events: bool, limit: int) -> int:
+    _print_json(progress(target, include_model_events=include_model_events, limit=limit))
     return 0
 
 

@@ -237,6 +237,34 @@ def read_events(
     return rows[-limit:]
 
 
+def progress(
+    run_id_or_path: str,
+    *,
+    include_model_events: bool = False,
+    limit: int = 20,
+) -> dict[str, Any]:
+    result = load(run_id_or_path)
+    run_dir = Path(result.run_dir)
+    manifest = read_json(run_dir / "manifest.json")
+    outputs_dir = run_dir / "outputs"
+    events = read_events(run_id_or_path)
+    visible_events = events if include_model_events else [row for row in events if row.get("component") != "model"]
+
+    return {
+        "run_id": result.run_id,
+        "pack": result.pack,
+        "entrypoint": result.entrypoint,
+        "status": result.status,
+        "started_at": manifest.get("started_at"),
+        "finished_at": manifest.get("finished_at"),
+        "resume_count": manifest.get("resume_count", 0),
+        "error": manifest.get("error"),
+        "snapshots": _progress_snapshots(outputs_dir),
+        "event_counts": _event_counts(events),
+        "recent_events": _tail(visible_events, limit),
+    }
+
+
 def resume(spec_hash: str, *, pack: str | None = None) -> BuildResult | None:
     """Return a previously completed run with the same spec hash, if present."""
 
@@ -360,3 +388,29 @@ def _read_jsonl(path: Path) -> list[dict[str, Any]]:
                 continue
             rows.append(json.loads(line))
     return rows
+
+
+def _progress_snapshots(outputs_dir: Path) -> dict[str, Any]:
+    snapshots: dict[str, Any] = {}
+    for path in sorted(outputs_dir.glob("*.json")):
+        if path.name in {"metrics.json", "failure_summary.json"}:
+            continue
+        if not (path.name.endswith("_progress.json") or path.name.endswith("_metrics.json")):
+            continue
+        snapshots[path.stem] = read_json(path)
+    return snapshots
+
+
+def _event_counts(events: list[dict[str, Any]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for row in events:
+        component = str(row.get("component"))
+        counts[component] = counts.get(component, 0) + 1
+    return dict(sorted(counts.items(), key=lambda item: (-item[1], item[0])))
+
+
+def _tail(rows: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
+    assert limit >= 0, "limit must be non-negative"
+    if limit == 0:
+        return []
+    return rows[-limit:]

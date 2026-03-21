@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from sdg.commons.run import load, read_events
+from sdg.commons.run import load, progress, read_events
 from sdg.commons.utils import read_yaml
 from sdg.packs.demo.build import build, publish, summarize, verify
 
@@ -25,6 +25,10 @@ def test_demo_pack_end_to_end(tmp_path, monkeypatch) -> None:
     run_events = read_events(first.run_id, component="run")
     assert [event["event"] for event in run_events] == ["started", "completed"]
     assert read_events(first.run_id, component="run", limit=1)[0]["event"] == "completed"
+    run_progress = progress(first.run_id)
+    assert run_progress["status"] == "completed"
+    assert run_progress["event_counts"]["run"] == 2
+    assert run_progress["recent_events"][-1]["event"] == "completed"
 
     verification = verify(first.run_id)
     assert verification["failed_rows"] == 0

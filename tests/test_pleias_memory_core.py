@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from sdg.commons import store
+from sdg.commons.run import progress
 from sdg.packs.pleias_synth import gen_memorization
 from sdg.packs.pleias_synth.build import build, publish, summarize, verify
 from sdg.packs.pleias_synth.verify import _answer_supported, _coverage_supported, _reasoning_grounded
@@ -147,6 +148,13 @@ def test_pleias_memory_core_flow(tmp_path, monkeypatch) -> None:
     assert summary["memorization"]["kept_preview"]
     assert summary["progress"]["stage"] == "completed"
     assert summary["llm_json_metrics"]["parse_successes"] >= 1
+    run_progress = progress(result.run_id)
+    assert "memorization_progress" in run_progress["snapshots"]
+    assert "llm_json_metrics" in run_progress["snapshots"]
+    assert all(event["component"] != "model" for event in run_progress["recent_events"])
+    run_progress_with_models = progress(result.run_id, include_model_events=True, limit=200)
+    if "model_metrics" in run_progress_with_models["snapshots"]:
+        assert any(event["component"] == "model" for event in run_progress_with_models["recent_events"])
 
     published = publish(result.run_id)
     out_dir = Path(published["out_dir"])
@@ -162,9 +170,9 @@ def test_pleias_memory_core_flow(tmp_path, monkeypatch) -> None:
     assert (Path(result.run_dir) / "outputs" / "llm_json_metrics.json").exists()
     assert (Path(result.run_dir) / "logs" / "events.jsonl").exists()
 
-    progress = json.loads((Path(result.run_dir) / "outputs" / "memorization_progress.json").read_text())
-    assert progress["stage"] == "completed"
-    assert progress["rows"] >= 2
+    progress_snapshot = json.loads((Path(result.run_dir) / "outputs" / "memorization_progress.json").read_text())
+    assert progress_snapshot["stage"] == "completed"
+    assert progress_snapshot["rows"] >= 2
 
     train_rows = store.read_parquet(out_dir / "train.parquet")
     assert train_rows
