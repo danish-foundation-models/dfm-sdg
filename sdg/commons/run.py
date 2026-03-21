@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -214,6 +215,28 @@ def compare(left: str, right: str) -> dict[str, Any]:
     }
 
 
+def read_events(
+    run_id_or_path: str,
+    *,
+    component: str | None = None,
+    limit: int | None = None,
+) -> list[dict[str, Any]]:
+    run_dir = _resolve_run_dir(run_id_or_path)
+    events_path = run_dir / "logs" / "events.jsonl"
+    if not events_path.exists():
+        return []
+
+    rows = _read_jsonl(events_path)
+    if component is not None:
+        rows = [row for row in rows if row.get("component") == component]
+    if limit is None:
+        return rows
+    assert limit >= 0, "limit must be non-negative"
+    if limit == 0:
+        return []
+    return rows[-limit:]
+
+
 def resume(spec_hash: str, *, pack: str | None = None) -> BuildResult | None:
     """Return a previously completed run with the same spec hash, if present."""
 
@@ -326,3 +349,14 @@ def _read_optional_json(path: Path) -> dict[str, Any] | None:
     if not path.exists():
         return None
     return read_json(path)
+
+
+def _read_jsonl(path: Path) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    with path.open() as handle:
+        for line in handle:
+            line = line.strip()
+            if not line:
+                continue
+            rows.append(json.loads(line))
+    return rows

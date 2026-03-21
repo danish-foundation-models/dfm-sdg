@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from sdg.commons.run import load
+from sdg.commons.run import load, read_events
 from sdg.commons.utils import read_yaml
 from sdg.packs.demo.build import build, publish, summarize, verify
 
@@ -22,6 +22,9 @@ def test_demo_pack_end_to_end(tmp_path, monkeypatch) -> None:
     loaded = load(first.run_id)
     assert loaded.pack == "demo"
     assert "dataset" in loaded.artifacts
+    run_events = read_events(first.run_id, component="run")
+    assert [event["event"] for event in run_events] == ["started", "completed"]
+    assert read_events(first.run_id, component="run", limit=1)[0]["event"] == "completed"
 
     verification = verify(first.run_id)
     assert verification["failed_rows"] == 0

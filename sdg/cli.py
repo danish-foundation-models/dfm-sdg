@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from sdg.commons.registry import find_pack_for_path, list_packs, load_pack
-from sdg.commons.run import compare, load
+from sdg.commons.run import compare, load, read_events
 from sdg.commons.utils import read_yaml
 
 
@@ -28,6 +28,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "compare":
         return _run_compare(args.left, args.right)
+
+    if args.command == "events":
+        return _run_events(args.target, component=args.component, limit=args.limit)
 
     if args.command == "list-packs":
         for pack_name in list_packs():
@@ -58,6 +61,11 @@ def _build_parser() -> argparse.ArgumentParser:
     compare_parser = subparsers.add_parser("compare")
     compare_parser.add_argument("left")
     compare_parser.add_argument("right")
+
+    events_parser = subparsers.add_parser("events")
+    events_parser.add_argument("target")
+    events_parser.add_argument("--component")
+    events_parser.add_argument("--limit", type=int)
 
     subparsers.add_parser("list-packs")
 
@@ -108,6 +116,11 @@ def _run_publish(target: str, out_dir: str | None) -> int:
 
 def _run_compare(left: str, right: str) -> int:
     _print_json(compare(left, right))
+    return 0
+
+
+def _run_events(target: str, *, component: str | None, limit: int | None) -> int:
+    _print_json({"events": read_events(target, component=component, limit=limit)})
     return 0
 
 
