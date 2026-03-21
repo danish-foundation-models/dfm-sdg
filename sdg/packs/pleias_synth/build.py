@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -8,7 +9,7 @@ from sdg.commons.run_log import log_event
 from sdg.commons.run import load, run
 from sdg.commons.store import read_jsonl
 from sdg.commons.utils import read_json, write_json
-from sdg.packs.pleias_synth.build_memory_core import build_memory_core
+from sdg.packs.pleias_synth.build_memory_core import build_memory_core, clean_corpus
 from sdg.packs.pleias_synth.export import (
     load_existing_quality,
     publish_generated_dataset,
@@ -16,6 +17,7 @@ from sdg.packs.pleias_synth.export import (
 )
 from sdg.packs.pleias_synth.gen_memorization import generate_memorization
 from sdg.packs.pleias_synth.rows import load_generated_rows
+from sdg.packs.pleias_synth.sources import load_sources
 from sdg.packs.pleias_synth.verify import verify_memorization, verify_memory_core
 
 
@@ -29,6 +31,7 @@ def build(cfg: dict[str, Any]) -> BuildResult:
         cfg=cfg,
         seed=cfg.get("seed"),
         reuse_completed=cfg.get("reuse_completed", True),
+        resume_incomplete=cfg.get("resume_incomplete", True),
     )
 
 
@@ -70,8 +73,9 @@ def summarize(run_id_or_path: str) -> dict[str, Any]:
     """Summarize the current state of a PleIAs memory-core run."""
 
     result = load(run_id_or_path)
-    chunks = read_jsonl(result.artifacts["memory_chunks"].path)
-    source_table = read_jsonl(result.artifacts["source_table"].path)
+    outputs_dir = Path(result.run_dir) / "outputs"
+    chunks = _read_jsonl(_output_path(result, "memory_chunks", "memory_chunks.jsonl"))
+    source_table = _read_jsonl(_output_path(result, "source_table", "source_table.jsonl"))
     generated_rows = load_generated_rows(result.run_dir)
     metrics, failure_summary = load_existing_quality(result)
 
@@ -82,6 +86,11 @@ def summarize(run_id_or_path: str) -> dict[str, Any]:
         "sources": len(source_table),
         "chunks": len(chunks),
         "generated_rows": len(generated_rows),
+        "artifacts": sorted(result.artifacts),
+        "memorization": _summarize_memorization_outputs(outputs_dir),
+        "progress": _read_optional_json(outputs_dir / "memorization_progress.json"),
+        "model_metrics": _read_optional_json(outputs_dir / "model_metrics.json"),
+        "llm_json_metrics": _read_optional_json(outputs_dir / "llm_json_metrics.json"),
         "metrics": metrics,
         "failure_summary": failure_summary,
     }
@@ -109,15 +118,7 @@ def _build_run(
     outputs_dir: Path,
     seed: int | None,
 ) -> dict[str, Artifact]:
-    log_event("pleias_synth", "memory_core_started")
-    memory = build_memory_core(cfg, outputs_dir)
-    log_event(
-        "pleias_synth",
-        "memory_core_completed",
-        sources=len(memory["source_table"]),
-        chunks=len(memory["chunks"]),
-        index_type=memory["index"]["type"],
-    )
+    memory = _load_or_build_memory(cfg, outputs_dir)
     artifacts = dict(memory["artifacts"])
 
     generation = cfg["generation"]
@@ -148,3 +149,158 @@ def _build_run(
         outputs_dir / "metrics.json",
     )
     return artifacts
+
+
+def _load_or_build_memory(cfg: dict[str, Any], outputs_dir: Path) -> dict[str, Any]:
+    existing = _load_existing_memory(cfg, outputs_dir)
+    if existing is not None:
+        log_event(
+            "pleias_synth",
+            "memory_core_resumed",
+            sources=len(existing["source_table"]),
+            chunks=len(existing["chunks"]),
+            index_type=existing["index"]["type"],
+        )
+        return existing
+
+    log_event("pleias_synth", "memory_core_started")
+    memory = build_memory_core(cfg, outputs_dir)
+    log_event(
+        "pleias_synth",
+        "memory_core_completed",
+        sources=len(memory["source_table"]),
+        chunks=len(memory["chunks"]),
+        index_type=memory["index"]["type"],
+    )
+    return memory
+
+
+def _load_existing_memory(cfg: dict[str, Any], outputs_dir: Path) -> dict[str, Any] | None:
+    chunks_path = outputs_dir / "memory_chunks.jsonl"
+    source_table_path = outputs_dir / "source_table.jsonl"
+    index_path = outputs_dir / "retrieval_index.json"
+    manifest_path = outputs_dir / "memory_manifest.json"
+    if not chunks_path.exists() or not source_table_path.exists() or not index_path.exists() or not manifest_path.exists():
+        return None
+
+    docs = clean_corpus(load_sources(cfg))
+    chunks = store.read_jsonl(chunks_path)
+    source_table = store.read_jsonl(source_table_path)
+    index = read_json(index_path)
+    return {
+        "docs": docs,
+        "sections": [],
+        "chunks": chunks,
+        "index": index,
+        "source_table": source_table,
+        "artifacts": {
+            "memory_chunks": Artifact(
+                name="memory_chunks",
+                path=str(chunks_path),
+                kind="jsonl",
+                meta={"rows": len(chunks)},
+            ),
+            "source_table": Artifact(
+                name="source_table",
+                path=str(source_table_path),
+                kind="jsonl",
+                meta={"rows": len(source_table)},
+            ),
+            "retrieval_index": Artifact(
+                name="retrieval_index",
+                path=str(index_path),
+                kind="blob",
+                meta={"type": index["type"]},
+            ),
+            "memory_manifest": Artifact(
+                name="memory_manifest",
+                path=str(manifest_path),
+                kind="blob",
+                meta={"source_count": len(source_table), "chunk_count": len(chunks)},
+            ),
+        },
+    }
+
+
+def _summarize_memorization_outputs(outputs_dir: Path) -> dict[str, Any]:
+    rows = _read_jsonl(outputs_dir / "memorization_rows.jsonl")
+    candidates = _read_jsonl(outputs_dir / "memorization_candidates.jsonl")
+    rejected = _read_jsonl(outputs_dir / "memorization_rejected.jsonl")
+
+    return {
+        "candidate_rows": len(candidates),
+        "rows": len(rows),
+        "rejected_rows": len(rejected),
+        "question_types": _count_values(rows, lambda row: row["meta"].get("question_type")),
+        "query_angles": _count_values(rows, lambda row: row["hidden"].get("query_angle")),
+        "source_titles": _count_values(rows, lambda row: row["hidden"].get("source_title"), limit=10),
+        "reject_reasons": _count_reject_reasons(rejected),
+        "kept_preview": _preview_rows(outputs_dir / "memorization_preview.jsonl"),
+        "rejected_preview": _preview_rows(outputs_dir / "memorization_rejected_preview.jsonl"),
+    }
+
+
+def _count_values(
+    rows: list[dict[str, Any]],
+    value_for: Callable[[dict[str, Any]], Any],
+    *,
+    limit: int | None = None,
+) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for row in rows:
+        value = value_for(row)
+        if value is None:
+            continue
+        key = str(value)
+        counts[key] = counts.get(key, 0) + 1
+    ordered = dict(sorted(counts.items(), key=lambda item: (-item[1], item[0])))
+    if limit is None:
+        return ordered
+    return dict(list(ordered.items())[:limit])
+
+
+def _count_reject_reasons(rows: list[dict[str, Any]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for row in rows:
+        reasons = row.get("hidden", {}).get("generation_filter", {}).get("reasons", [])
+        for reason in reasons:
+            key = str(reason)
+            counts[key] = counts.get(key, 0) + 1
+    return dict(sorted(counts.items(), key=lambda item: (-item[1], item[0])))
+
+
+def _preview_rows(path: Path, *, limit: int = 3) -> list[dict[str, Any]]:
+    rows = _read_jsonl(path)
+    preview: list[dict[str, Any]] = []
+    for row in rows[:limit]:
+        preview.append(
+            {
+                "id": row.get("id"),
+                "source_title": row.get("hidden", {}).get("source_title"),
+                "question_type": row.get("meta", {}).get("question_type"),
+                "query_angle": row.get("hidden", {}).get("query_angle"),
+                "prompt": row.get("prompt"),
+                "target": row.get("target"),
+                "reasons": row.get("hidden", {}).get("generation_filter", {}).get("reasons", []),
+            }
+        )
+    return preview
+
+
+def _read_jsonl(path: Path) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    return store.read_jsonl(path)
+
+
+def _read_optional_json(path: Path) -> dict[str, Any] | None:
+    if not path.exists():
+        return None
+    return read_json(path)
+
+
+def _output_path(result: BuildResult, artifact_name: str, filename: str) -> Path:
+    artifact = result.artifacts.get(artifact_name)
+    if artifact is not None:
+        return Path(artifact.path)
+    return Path(result.run_dir) / "outputs" / filename

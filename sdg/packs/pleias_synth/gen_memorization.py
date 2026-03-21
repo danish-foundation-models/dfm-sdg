@@ -52,17 +52,34 @@ class MemorizationStats(TypedDict):
     rejected_rows: int
 
 
+class _IndexedQueryPlan(TypedDict):
+    row_index: int
+    plan: dict[str, Any]
+
+
+class _ResumeState(TypedDict):
+    candidate_ids: set[str]
+    stats: MemorizationStats
+    reject_reasons: dict[str, int]
+
+
 class _MemorizationProgressTracker:
-    def __init__(self, *, worker_concurrency: int):
+    def __init__(
+        self,
+        *,
+        worker_concurrency: int,
+        stats: MemorizationStats,
+        reject_reasons: dict[str, int],
+    ):
         self.worker_concurrency = worker_concurrency
         self.started_at = time.monotonic()
         self.stage = "initializing"
         self.completed = 0
         self.total: int | None = None
-        self.candidate_rows = 0
-        self.rows = 0
-        self.rejected_rows = 0
-        self.reject_reasons: dict[str, int] = {}
+        self.candidate_rows = stats["candidate_rows"]
+        self.rows = stats["rows"]
+        self.rejected_rows = stats["rejected_rows"]
+        self.reject_reasons = dict(reject_reasons)
 
     def start(self) -> None:
         self.stage = "generating_rows"
@@ -160,8 +177,6 @@ async def _write_memorization_outputs_async(
     rows_path = outputs_dir / "memorization_rows.jsonl"
     candidate_path = outputs_dir / "memorization_candidates.jsonl"
     rejected_path = outputs_dir / "memorization_rejected.jsonl"
-    rows_preview: list[dict[str, Any]] = []
-    rejected_preview: list[dict[str, Any]] = []
     settings = _memorization_settings(cfg)
     chunk_lookup = {chunk["id"]: chunk for chunk in memory["chunks"]}
     worker_concurrency = _worker_concurrency(models)
@@ -176,27 +191,45 @@ async def _write_memorization_outputs_async(
         chunk_lookup,
         settings,
     )
-    stats: MemorizationStats = {
-        "rows": 0,
-        "candidate_rows": 0,
-        "rejected_rows": 0,
-    }
-    tracker = _MemorizationProgressTracker(worker_concurrency=worker_concurrency)
+    resume_state = _load_resume_state(outputs_dir)
+    stats = dict(resume_state["stats"])
+    tracker = _MemorizationProgressTracker(
+        worker_concurrency=worker_concurrency,
+        stats=stats,
+        reject_reasons=resume_state["reject_reasons"],
+    )
     progress = _progress_reporter("memorization.rows", tracker)
+    indexed_query_plans = _indexed_query_plans(query_plans)
+    pending_query_plans = _pending_query_plans(indexed_query_plans, resume_state["candidate_ids"])
 
-    _progress_log(f"memorization: generating rows with worker_concurrency={worker_concurrency}")
+    resume_count = len(resume_state["candidate_ids"])
+    if resume_count:
+        _progress_log(
+            f"memorization: resuming with {resume_count} existing candidates and worker_concurrency={worker_concurrency}"
+        )
+        log_event(
+            "pleias_synth",
+            "memorization_resumed",
+            existing_candidate_rows=resume_count,
+            existing_rows=stats["rows"],
+            existing_rejected_rows=stats["rejected_rows"],
+            worker_concurrency=worker_concurrency,
+        )
+    else:
+        _progress_log(f"memorization: generating rows with worker_concurrency={worker_concurrency}")
     log_event(
         "pleias_synth",
         "memorization_started",
         worker_concurrency=worker_concurrency,
+        resumed=bool(resume_count),
     )
     tracker.start()
-    with rows_path.open("w") as rows_handle, candidate_path.open("w") as candidate_handle, rejected_path.open("w") as rejected_handle:
+    file_mode = "a" if resume_count else "w"
+    with rows_path.open(file_mode) as rows_handle, candidate_path.open(file_mode) as candidate_handle, rejected_path.open(file_mode) as rejected_handle:
         async for row in map_async_unordered(
-            query_plans,
-            lambda index, plan: _generate_candidate_row_async(
-                index,
-                plan,
+            pending_query_plans,
+            lambda _ignored_index, item: _generate_candidate_row_async(
+                item,
                 memory_index=memory["index"],
                 chunk_lookup=chunk_lookup,
                 settings=settings,
@@ -214,17 +247,21 @@ async def _write_memorization_outputs_async(
             if reasons:
                 stats["rejected_rows"] += 1
                 _write_jsonl_line(rejected_handle, annotated)
-                if len(rejected_preview) < 50:
-                    rejected_preview.append(annotated)
                 continue
 
             stats["rows"] += 1
             _write_jsonl_line(rows_handle, annotated)
-            if len(rows_preview) < 50:
-                rows_preview.append(annotated)
 
-    common_publish.write_preview(rows_preview, outputs_dir / "memorization_preview.jsonl", n=50)
-    common_publish.write_preview(rejected_preview, outputs_dir / "memorization_rejected_preview.jsonl", n=50)
+    common_publish.write_preview(
+        _jsonl_prefix(rows_path, limit=50),
+        outputs_dir / "memorization_preview.jsonl",
+        n=50,
+    )
+    common_publish.write_preview(
+        _jsonl_prefix(rejected_path, limit=50),
+        outputs_dir / "memorization_rejected_preview.jsonl",
+        n=50,
+    )
     tracker.finish()
     log_event(
         "pleias_synth",
@@ -512,20 +549,92 @@ def _worker_concurrency(models: dict[str, LLM]) -> int:
 def _write_jsonl_line(handle: TextIO, row: dict[str, Any]) -> None:
     handle.write(json.dumps(row, sort_keys=True))
     handle.write("\n")
+    handle.flush()
+
+
+def _load_resume_state(outputs_dir) -> _ResumeState:
+    candidate_ids: set[str] = set()
+    stats: MemorizationStats = {
+        "rows": 0,
+        "candidate_rows": 0,
+        "rejected_rows": 0,
+    }
+    reject_reasons: dict[str, int] = {}
+
+    candidate_path = outputs_dir / "memorization_candidates.jsonl"
+    if candidate_path.exists():
+        for row in store.read_jsonl(candidate_path):
+            candidate_ids.add(str(row["id"]))
+        stats["candidate_rows"] = len(candidate_ids)
+
+    rows_path = outputs_dir / "memorization_rows.jsonl"
+    if rows_path.exists():
+        stats["rows"] = len(store.read_jsonl(rows_path))
+
+    rejected_path = outputs_dir / "memorization_rejected.jsonl"
+    if rejected_path.exists():
+        rejected_rows = store.read_jsonl(rejected_path)
+        stats["rejected_rows"] = len(rejected_rows)
+        for row in rejected_rows:
+            reasons = row.get("hidden", {}).get("generation_filter", {}).get("reasons", [])
+            for reason in reasons:
+                key = str(reason)
+                reject_reasons[key] = reject_reasons.get(key, 0) + 1
+
+    return {
+        "candidate_ids": candidate_ids,
+        "stats": stats,
+        "reject_reasons": reject_reasons,
+    }
+
+
+def _indexed_query_plans(query_plans: Iterable[dict[str, Any]]) -> Iterator[_IndexedQueryPlan]:
+    for row_index, plan in enumerate(query_plans):
+        yield {
+            "row_index": row_index,
+            "plan": plan,
+        }
+
+
+def _pending_query_plans(
+    indexed_query_plans: Iterable[_IndexedQueryPlan],
+    existing_candidate_ids: set[str],
+) -> Iterator[_IndexedQueryPlan]:
+    for item in indexed_query_plans:
+        row_id = f"memorization-{item['row_index']:06d}"
+        if row_id in existing_candidate_ids:
+            continue
+        yield item
+
+
+def _jsonl_prefix(path, *, limit: int) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    rows: list[dict[str, Any]] = []
+    with path.open() as handle:
+        for line in handle:
+            line = line.strip()
+            if not line:
+                continue
+            rows.append(json.loads(line))
+            if len(rows) >= limit:
+                break
+    return rows
 
 
 async def _generate_candidate_row_async(
-    index: int,
-    plan: dict[str, Any],
+    item: _IndexedQueryPlan,
     *,
     memory_index: dict[str, Any],
     chunk_lookup: dict[str, dict[str, Any]],
     settings: MemorizationSettings,
     models: dict[str, LLM],
 ) -> dict[str, Any]:
+    row_index = item["row_index"]
+    plan = item["plan"]
     row = await _make_row_async(
         plan,
-        index,
+        row_index,
         llm=models["query_teacher"],
         planner=models["task_planner"],
         language_plan=settings["language_plan"],

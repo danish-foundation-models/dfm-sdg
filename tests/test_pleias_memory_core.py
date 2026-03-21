@@ -142,6 +142,11 @@ def test_pleias_memory_core_flow(tmp_path, monkeypatch) -> None:
     assert summary["sources"] == 3
     assert summary["chunks"] >= 3
     assert summary["generated_rows"] >= 2
+    assert summary["memorization"]["rows"] >= 2
+    assert summary["memorization"]["candidate_rows"] >= summary["memorization"]["rows"]
+    assert summary["memorization"]["kept_preview"]
+    assert summary["progress"]["stage"] == "completed"
+    assert summary["llm_json_metrics"]["parse_successes"] >= 1
 
     published = publish(result.run_id)
     out_dir = Path(published["out_dir"])
@@ -482,3 +487,72 @@ def test_backreasoning_messages_ground_delivery_note_in_visible_prompt() -> None
     assert "Persona id:" not in user
     assert "Query angle:" not in user
     assert "Reasoning language:" not in user
+
+
+def test_build_resumes_failed_memorization_run(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("SDG_ARTIFACTS_ROOT", str(tmp_path / "artifacts"))
+    monkeypatch.setenv("SDG_REPORTS_ROOT", str(tmp_path / "reports"))
+    fake_llm = FakeLLM()
+    monkeypatch.setattr(
+        gen_memorization,
+        "_load_memorization_models",
+        lambda cfg: {
+            "task_planner": fake_llm,
+            "query_teacher": fake_llm,
+            "reasoning_teacher": fake_llm,
+            "answer_teacher": fake_llm,
+            "judge": fake_llm,
+        },
+    )
+
+    original_judge = gen_memorization._judge_row_async
+    state = {"failed": False}
+
+    async def flaky_judge(row: dict[str, object], llm: object) -> dict[str, object]:
+        if row["id"] == "memorization-000001" and not state["failed"]:
+            state["failed"] = True
+            raise RuntimeError("planned stop")
+        return await original_judge(row, llm)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(gen_memorization, "_judge_row_async", flaky_judge)
+
+    fixture_path = Path(__file__).resolve().parent / "fixtures" / "pleias_sources.jsonl"
+    cfg = {
+        "pack": "pleias_synth",
+        "reuse_completed": False,
+        "resume_incomplete": True,
+        "memory_core": {
+            "source_path": str(fixture_path),
+            "chunk_size": 20,
+            "chunk_overlap": 5,
+        },
+        "generation": {
+            "families": ["memorization"],
+            "max_rows_per_family": 3,
+            "train_fraction": 0.75,
+            "memorization": {
+                "use_llm": True,
+                "lead_sentences": 2,
+                "max_sentences_per_doc": 1,
+                "retrieve_top_k": 3,
+            },
+        },
+    }
+
+    with pytest.raises(RuntimeError, match="planned stop"):
+        build(cfg)
+
+    run_dirs = sorted((tmp_path / "artifacts" / "runs" / "pleias_synth").glob("*"))
+    assert len(run_dirs) == 1
+    run_dir = run_dirs[0]
+    partial_candidates = store.read_jsonl(run_dir / "outputs" / "memorization_candidates.jsonl")
+    assert len(partial_candidates) == 1
+    assert partial_candidates[0]["id"] == "memorization-000000"
+
+    monkeypatch.setattr(gen_memorization, "_judge_row_async", original_judge)
+    result = build(cfg)
+
+    assert result.run_id == run_dir.name
+    final_candidates = store.read_jsonl(run_dir / "outputs" / "memorization_candidates.jsonl")
+    assert [row["id"] for row in final_candidates].count("memorization-000000") == 1
+    assert len(final_candidates) >= 2

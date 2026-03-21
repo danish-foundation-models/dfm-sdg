@@ -46,6 +46,7 @@ def run(
     cfg: dict[str, Any],
     seed: int | None = None,
     reuse_completed: bool = True,
+    resume_incomplete: bool = True,
 ) -> BuildResult:
     """Execute one explicit work unit and record it under a run directory."""
 
@@ -62,31 +63,50 @@ def run(
         if reused is not None:
             return reused
 
-    run_id = _new_run_id()
-    run_dir = artifacts_root() / "runs" / pack / run_id
-    outputs_dir = ensure_dir(run_dir / "outputs")
-    ensure_dir(run_dir / "logs")
-    git_state = git_info()
+    resumed = False
+    if resume_incomplete:
+        resumed_manifest = _resume_incomplete_manifest(spec_hash, pack=pack)
+    else:
+        resumed_manifest = None
 
-    manifest = {
-        "run_id": run_id,
-        "spec_hash": spec_hash,
-        "pack": pack,
-        "entrypoint": entrypoint,
-        "status": "running",
-        "created_at": iso_timestamp(),
-        "started_at": iso_timestamp(),
-        "finished_at": None,
-        "git_commit": git_state["git_commit"],
-        "git_dirty": git_state["git_dirty"],
-        "seed": seed,
-        "output_artifacts": {},
-        "models": _model_manifest(cfg),
-        "error": None,
-    }
+    if resumed_manifest is None:
+        run_id = _new_run_id()
+        run_dir = artifacts_root() / "runs" / pack / run_id
+        outputs_dir = ensure_dir(run_dir / "outputs")
+        ensure_dir(run_dir / "logs")
+        git_state = git_info()
 
-    write_json(manifest, run_dir / "manifest.json")
-    write_yaml(cfg, run_dir / "config.yaml")
+        manifest = {
+            "run_id": run_id,
+            "spec_hash": spec_hash,
+            "pack": pack,
+            "entrypoint": entrypoint,
+            "status": "running",
+            "created_at": iso_timestamp(),
+            "started_at": iso_timestamp(),
+            "finished_at": None,
+            "git_commit": git_state["git_commit"],
+            "git_dirty": git_state["git_dirty"],
+            "seed": seed,
+            "output_artifacts": {},
+            "models": _model_manifest(cfg),
+            "error": None,
+            "resume_count": 0,
+        }
+        write_json(manifest, run_dir / "manifest.json")
+        write_yaml(cfg, run_dir / "config.yaml")
+    else:
+        run_dir, manifest = resumed_manifest
+        run_id = manifest["run_id"]
+        outputs_dir = ensure_dir(run_dir / "outputs")
+        ensure_dir(run_dir / "logs")
+        manifest["status"] = "running"
+        manifest["finished_at"] = None
+        manifest["error"] = None
+        manifest["resumed_at"] = iso_timestamp()
+        manifest["resume_count"] = int(manifest.get("resume_count", 0)) + 1
+        write_json(manifest, run_dir / "manifest.json")
+        resumed = True
 
     with activate_run_log(run_dir):
         log_event(
@@ -96,6 +116,7 @@ def run(
             entrypoint=entrypoint,
             run_id=run_id,
             spec_hash=spec_hash,
+            resumed=resumed,
         )
         try:
             artifacts = fn(
@@ -211,6 +232,24 @@ def resume(spec_hash: str, *, pack: str | None = None) -> BuildResult | None:
 
     matches.sort(key=lambda item: item[0], reverse=True)
     return load(str(matches[0][1]))
+
+
+def _resume_incomplete_manifest(spec_hash: str, *, pack: str) -> tuple[Path, dict[str, Any]] | None:
+    matches: list[tuple[str, Path, dict[str, Any]]] = []
+    for manifest_path in _manifest_paths(pack):
+        manifest = read_json(manifest_path)
+        if manifest.get("status") not in {"running", "failed"}:
+            continue
+        if manifest.get("spec_hash") != spec_hash:
+            continue
+        matches.append((manifest.get("created_at") or "", manifest_path.parent, manifest))
+
+    if not matches:
+        return None
+
+    matches.sort(key=lambda item: item[0], reverse=True)
+    _, run_dir, manifest = matches[0]
+    return run_dir, manifest
 
 
 def _new_run_id() -> str:
