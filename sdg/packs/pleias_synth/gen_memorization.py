@@ -10,7 +10,8 @@ from typing import Any, TextIO, TypedDict
 from sdg.commons import Artifact, store
 from sdg.commons import publish as common_publish
 from sdg.commons.model import LLM, load_clients
-from sdg.commons.work_queue import map_async_ordered
+from sdg.commons.work_queue import map_async_unordered
+from sdg.packs.pleias_synth.languages import LanguagePlan, language_name, load_language_plan
 from sdg.packs.pleias_synth.llm_json import achat_json
 from sdg.packs.pleias_synth.memorization_filters import (
     annotate_filter_result,
@@ -40,6 +41,7 @@ class MemorizationSettings(TypedDict):
     planning_retrieve_top_k: int
     planning_claims: int
     use_llm: bool
+    language_plan: LanguagePlan
 
 
 class MemorizationStats(TypedDict):
@@ -120,7 +122,7 @@ async def _write_memorization_outputs_async(
 
     _progress_log(f"memorization: generating rows with worker_concurrency={worker_concurrency}")
     with rows_path.open("w") as rows_handle, candidate_path.open("w") as candidate_handle, rejected_path.open("w") as rejected_handle:
-        async for row in map_async_ordered(
+        async for row in map_async_unordered(
             query_plans,
             lambda index, plan: _generate_candidate_row_async(
                 index,
@@ -304,7 +306,11 @@ def retrieve_support_row(
     chunk_lookup: dict[str, dict[str, Any]],
     settings: MemorizationSettings,
 ) -> dict[str, Any]:
-    query_tokens = set(tokenize(row["prompt"]))
+    query_text = row["prompt"]
+    if row["meta"].get("language_mode") == "cross_language":
+        query_text = _source_support_query(row)
+
+    query_tokens = set(tokenize(query_text))
     scored_chunks: list[tuple[int, dict[str, Any]]] = []
     for chunk_id, entry in index["chunks"].items():
         overlap = len(query_tokens.intersection(entry["tokens"]))
@@ -340,13 +346,27 @@ def retrieve_support_row(
     return updated
 
 
+def _source_support_query(row: dict[str, Any]) -> str:
+    teacher_bundle = row["hidden"]["teacher_bundle"]
+    task_plan = row["hidden"]["task_plan"]
+    parts = [
+        row["hidden"]["source_title"],
+        row["hidden"]["sentence"],
+        *teacher_bundle.get("supporting_claims", []),
+        *teacher_bundle.get("retrieved_claims", []),
+        *as_list(task_plan.get("coverage_points")),
+    ]
+    return " ".join(part for part in parts if part)
+
+
 def with_backreasoning(row: dict[str, Any], trace: dict[str, Any]) -> dict[str, Any]:
     hidden = dict(row["hidden"])
     hidden["teacher_backreasoning"] = trace
+    hidden["source_reasoning"] = _render_source_reasoning(row)
 
     updated = dict(row)
     updated["hidden"] = hidden
-    updated["reasoning"] = _render_reasoning(trace)
+    updated["reasoning"] = _render_reasoning(row, trace)
 
     proposed_target = trace["proposed_target"]
     if proposed_target and _target_needs_upgrade(updated):
@@ -419,7 +439,13 @@ async def _generate_candidate_row_async(
     settings: MemorizationSettings,
     models: dict[str, LLM],
 ) -> dict[str, Any]:
-    row = await _make_row_async(plan, index, llm=models["query_teacher"], planner=models["task_planner"])
+    row = await _make_row_async(
+        plan,
+        index,
+        llm=models["query_teacher"],
+        planner=models["task_planner"],
+        language_plan=settings["language_plan"],
+    )
     row = retrieve_support_row(row, memory_index, chunk_lookup, settings)
     trace = await _llm_backreasoning_async(row, models["reasoning_teacher"])
     row = with_backreasoning(row, trace)
@@ -492,6 +518,7 @@ async def _make_row_async(
     *,
     llm: LLM,
     planner: LLM,
+    language_plan: LanguagePlan,
 ) -> dict[str, Any]:
     bundle = plan["bundle"]
     persona = plan["persona"]
@@ -509,6 +536,7 @@ async def _make_row_async(
         query_profile,
         task_plan,
         plan["planning_sources"],
+        language_plan,
         llm,
     )
 
@@ -529,6 +557,7 @@ async def _make_row_async(
             "source_url": doc.get("url"),
             "sentence": bundle["primary_sentence"],
             "sentence_index": bundle["sentence_index"],
+            "source_target": target_seed,
             "question_type": question["question_type"],
             "generation_mode": question["generation_mode"],
             "persona": persona,
@@ -554,6 +583,11 @@ async def _make_row_async(
             "query_angle": query_angle,
             "task_type": task_plan["task_type"],
             "user_goal": task_plan["user_goal"],
+            "language_mode": language_plan["kind"],
+            "source_language": language_plan["source"],
+            "prompt_language": language_plan["prompt"],
+            "reasoning_language": language_plan["reasoning"],
+            "target_language": language_plan["target"],
             "query_profile_id": query_profile["profile_id"],
             "query_profile_source": query_profile["source"],
             "query_profile_tags": query_profile["tags"],
@@ -716,9 +750,19 @@ async def _llm_question_async(
     query_profile: dict[str, Any],
     task_plan: dict[str, Any],
     planning_sources: list[dict[str, Any]],
+    language_plan: LanguagePlan,
     llm: LLM,
 ) -> dict[str, str]:
-    messages = _question_messages(doc, bundle, persona, query_angle, query_profile, task_plan, planning_sources)
+    messages = _question_messages(
+        doc,
+        bundle,
+        persona,
+        query_angle,
+        query_profile,
+        task_plan,
+        planning_sources,
+        language_plan,
+    )
     parsed = await achat_json(llm, messages, temperature=0.4)
     return _parse_question(parsed, task_plan)
 
@@ -731,6 +775,7 @@ def _question_messages(
     query_profile: dict[str, Any],
     task_plan: dict[str, Any],
     planning_sources: list[dict[str, Any]],
+    language_plan: LanguagePlan,
 ) -> list[dict[str, str]]:
     teacher_bundle = _build_teacher_bundle(doc, bundle)
     teacher_bundle["retrieved_context"] = list(planning_sources)
@@ -738,6 +783,9 @@ def _question_messages(
     exemplar_block = ""
     if exemplars:
         exemplar_block = "Query profile exemplars:\n" + "\n".join(f"- {item}" for item in exemplars) + "\n\n"
+    source_language = language_name(language_plan["source"])
+    prompt_language = language_name(language_plan["prompt"])
+    prompt_guidance = _language_generation_guidance(language_plan["prompt"])
 
     return [
         {
@@ -750,12 +798,15 @@ def _question_messages(
                 "The prompt may ask for an overview, explanation, planning help, comparison, timeline, clarification, or a narrower lookup, "
                 "depending on what the hidden task plan supports. "
                 "Realize the query from the structured profile you are given rather than defaulting to the same polished style every time. "
-                "If the profile implies imperfect language, keep it light and realistic."
+                "If the profile implies imperfect language, keep it light and realistic. "
+                f"The hidden evidence is in {source_language}. Write the user-facing prompt in {prompt_language}. "
+                f"{prompt_guidance}"
             ),
         },
         {
             "role": "user",
             "content": (
+                f"Prompt language: {prompt_language}\n"
                 f"Bias hint: {query_angle}\n"
                 f"Persona id: {persona['persona_id']}\n"
                 f"Persona name: {persona['name']}\n"
@@ -810,6 +861,9 @@ async def _llm_backreasoning_async(row: dict[str, Any], llm: LLM) -> dict[str, A
 def _backreasoning_messages(row: dict[str, Any]) -> list[dict[str, str]]:
     teacher_bundle = row["hidden"]["teacher_bundle"]
     task_plan = row["hidden"]["task_plan"]
+    source_language = language_name(row["meta"]["source_language"])
+    reasoning_language = language_name(row["meta"]["reasoning_language"])
+    reasoning_guidance = _language_generation_guidance(row["meta"]["reasoning_language"])
     source_snippets = "\n\n".join(
         f"- {source['title']}: {source['snippet']}"
         for source in row["sources"][:3]
@@ -821,11 +875,19 @@ def _backreasoning_messages(row: dict[str, Any]) -> list[dict[str, str]]:
                 "You write strongly opinionated recall-style reasoning for synthetic memorization data. "
                 "The visible reasoning must read like recalled knowledge, not document analysis. "
                 "Never mention texts, passages, snippets, sources, evidence, retrieved support, or teacher bundles. "
-                "Return strict JSON with keys key_question, assumption_check, known_facts, reasoning_steps, "
+                "Return strict JSON with keys key_question, assumption_check, delivery_note, known_facts, reasoning_steps, "
                 "caveats, synthesis, and proposed_target. "
                 "known_facts, reasoning_steps, and caveats must be arrays of short strings. "
                 "Ground every step in the hidden facts you were given, but phrase it as memory recall. "
-                "If the query carries an implicit assumption, say it directly in assumption_check."
+                "If the query carries an implicit assumption, say it directly in assumption_check. "
+                "Use delivery_note for a short explanation of which language the final answer should use and why. "
+                "Base that explanation only on the visible prompt language and obvious conversational context. "
+                "delivery_note should usually be a plain sentence about matching the language of the prompt for clarity and consistency. "
+                "Do not claim the user explicitly requested a language unless the prompt itself says so. "
+                "Do not mention personas, profiles, hidden instructions, system settings, target audiences, or language labels from the hidden prompt. "
+                "Do not say the user gave instructions or an explicit request unless that wording appears in the prompt itself. "
+                f"The hidden evidence is in {source_language}. Write all visible recall notes in {reasoning_language}. "
+                f"{reasoning_guidance}"
             ),
         },
         {
@@ -833,8 +895,7 @@ def _backreasoning_messages(row: dict[str, Any]) -> list[dict[str, str]]:
             "content": (
                 f"Prompt: {row['prompt']}\n"
                 f"Question type: {row['meta'].get('question_type')}\n"
-                f"Persona id: {row['meta'].get('persona_id')}\n"
-                f"Query angle: {row['meta'].get('query_angle')}\n\n"
+                "\n"
                 f"Task type: {task_plan['task_type']}\n"
                 f"User goal: {task_plan['user_goal']}\n"
                 f"Answer shape: {task_plan['answer_shape']}\n"
@@ -851,9 +912,12 @@ def _backreasoning_messages(row: dict[str, Any]) -> list[dict[str, str]]:
 
 
 def _parse_backreasoning(row: dict[str, Any], parsed: dict[str, Any]) -> dict[str, Any]:
+    delivery_note = clean_recall_text(str(parsed.get("delivery_note", "")).strip())
+    assert delivery_note, "backreasoning delivery_note must not be empty"
     return {
         "key_question": clean_recall_text(str(parsed.get("key_question", "")).strip()) or _default_key_question(row),
         "assumption_check": clean_recall_text(str(parsed.get("assumption_check", "")).strip()),
+        "delivery_note": delivery_note,
         "known_facts": clean_recall_list(parsed.get("known_facts") or parsed.get("evidence_points")),
         "reasoning_steps": clean_recall_list(parsed.get("reasoning_steps")),
         "caveats": clean_recall_list(parsed.get("caveats")),
@@ -863,30 +927,104 @@ def _parse_backreasoning(row: dict[str, Any], parsed: dict[str, Any]) -> dict[st
     }
 
 
-def _render_reasoning(trace: dict[str, Any]) -> str:
-    parts = [f"Key question: {clean_recall_text(trace['key_question'])}"]
+def _render_reasoning(row: dict[str, Any], trace: dict[str, Any]) -> str:
+    reasoning_language = row["meta"]["reasoning_language"]
+    if reasoning_language == "da":
+        key_question_label = "Nøglespørgsmål"
+        assumption_label = "Antagelsestjek"
+        delivery_label = "Svarplan"
+        known_facts_label = "### 1. Kendte fakta"
+        resolution_label = "### 2. Afklaring"
+        caveats_label = "### 3. Forbehold"
+        synthesis_label = "### 4. Konklusion"
+    else:
+        key_question_label = "Key question"
+        assumption_label = "Assumption check"
+        delivery_label = "Response plan"
+        known_facts_label = "### 1. Known facts"
+        resolution_label = "### 2. Resolution"
+        caveats_label = "### 3. Caveats"
+        synthesis_label = "### 4. Synthesis"
+
+    parts = [f"{key_question_label}: {clean_recall_text(trace['key_question'])}"]
 
     assumption_check = clean_recall_text(str(trace.get("assumption_check", "")).strip())
     if assumption_check:
-        parts.append(f"Assumption check: {assumption_check}")
+        parts.append(f"{assumption_label}: {assumption_check}")
+
+    delivery_note = clean_recall_text(str(trace.get("delivery_note", "")).strip())
+    if delivery_note:
+        parts.append(f"{delivery_label}: {delivery_note}")
 
     known_facts = clean_recall_list(trace.get("known_facts") or trace.get("evidence_points"))
     if known_facts:
-        parts.append("### 1. Known facts\n" + "\n".join(f"- {item}" for item in known_facts))
+        parts.append(known_facts_label + "\n" + "\n".join(f"- {item}" for item in known_facts))
 
     reasoning_steps = clean_recall_list(trace.get("reasoning_steps"))
     if reasoning_steps:
-        parts.append("### 2. Resolution\n" + "\n".join(f"- {item}" for item in reasoning_steps))
+        parts.append(resolution_label + "\n" + "\n".join(f"- {item}" for item in reasoning_steps))
 
     caveats = clean_recall_list(trace.get("caveats"))
     if caveats:
-        parts.append("### 3. Caveats\n" + "\n".join(f"- {item}" for item in caveats))
+        parts.append(caveats_label + "\n" + "\n".join(f"- {item}" for item in caveats))
 
     synthesis = clean_recall_text(str(trace.get("synthesis", "")).strip())
     if synthesis:
-        parts.append("### 4. Synthesis\n" + synthesis)
+        parts.append(synthesis_label + "\n" + synthesis)
 
     return "\n\n".join(parts)
+
+
+def _render_source_reasoning(row: dict[str, Any]) -> str:
+    source_language = row["meta"]["source_language"]
+    teacher_bundle = row["hidden"]["teacher_bundle"]
+    coverage_points = as_list(row["hidden"]["task_plan"].get("coverage_points"))
+    if source_language == "da":
+        key_question_label = "Nøglespørgsmål"
+        known_facts_label = "### 1. Kendte fakta"
+        resolution_label = "### 2. Afklaring"
+        synthesis_label = "### 3. Konklusion"
+    else:
+        key_question_label = "Key question"
+        known_facts_label = "### 1. Known facts"
+        resolution_label = "### 2. Resolution"
+        synthesis_label = "### 3. Synthesis"
+
+    known_facts = [
+        row["hidden"]["sentence"],
+        *teacher_bundle.get("supporting_claims", [])[:2],
+        *teacher_bundle.get("retrieved_claims", [])[:2],
+    ]
+    parts = [f"{key_question_label}: {_source_key_question(row)}"]
+    parts.append(known_facts_label + "\n" + "\n".join(f"- {item}" for item in known_facts if item))
+    if coverage_points:
+        parts.append(resolution_label + "\n" + "\n".join(f"- {item}" for item in coverage_points[:3]))
+    parts.append(synthesis_label + "\n" + _source_synthesis(row))
+    return "\n\n".join(parts)
+
+
+def _source_key_question(row: dict[str, Any]) -> str:
+    source_language = row["meta"]["source_language"]
+    task_type = row["hidden"]["task_plan"]["task_type"]
+    if source_language == "da":
+        if task_type in {"reverse_definition", "source_clue", "identification"}:
+            return "Hvilken artikel eller titel bliver entydigt identificeret af ledetråden?"
+        if task_type in {"overview", "planning", "comparison", "timeline", "explanation"}:
+            return "Hvilke huskede pointer er nødvendige for at opfylde brugerens mål?"
+        return "Hvilket husket faktamønster løser bedst prompten?"
+    if task_type in {"reverse_definition", "source_clue", "identification"}:
+        return "Which article title is uniquely identified by the clue?"
+    if task_type in {"overview", "planning", "comparison", "timeline", "explanation"}:
+        return "Which remembered points are necessary to satisfy the user goal?"
+    return "Which remembered fact pattern best resolves the prompt?"
+
+
+def _source_synthesis(row: dict[str, Any]) -> str:
+    source_language = row["meta"]["source_language"]
+    source_target = row["hidden"]["source_target"]
+    if source_language == "da":
+        return f"Svaret er {source_target}, fordi det er den huskede oplysning, der løser prompten."
+    return f"The answer is {source_target} because that is the remembered fact that resolves the prompt."
 
 
 async def _generate_answer_async(row: dict[str, Any], llm: LLM) -> str:
@@ -902,6 +1040,9 @@ def _answer_messages(row: dict[str, Any]) -> list[dict[str, str]]:
     assistant_style = row["hidden"]["assistant_style"]
     task_plan = row["hidden"]["task_plan"]
     target_seed = row["hidden"]["target_seed"]
+    source_language = language_name(row["meta"]["source_language"])
+    target_language = language_name(row["meta"]["target_language"])
+    target_guidance = _language_generation_guidance(row["meta"]["target_language"])
     source_snippets = "\n\n".join(
         f"- {source['title']}: {source['snippet']}"
         for source in row["sources"][:5]
@@ -925,12 +1066,15 @@ def _answer_messages(row: dict[str, Any]) -> list[dict[str, str]]:
                 "A bare title, name, date, noun phrase, or clipped span is invalid. "
                 "If the core answer is a title, person, year, role, or attribute, place it inside a natural sentence. "
                 "Do not mention hidden facts, sources, snippets, or retrieval. "
-                "Do not imitate the user's errors or slang. Keep the assistant voice steady, clear, and grounded."
+                "Do not imitate the user's errors or slang. Keep the assistant voice steady, clear, and grounded. "
+                f"The hidden evidence is in {source_language}. Write the final answer in {target_language}. "
+                f"{target_guidance}"
             ),
         },
         {
             "role": "user",
             "content": (
+                f"Target language: {target_language}\n"
                 f"Prompt: {row['prompt']}\n\n"
                 f"Question type: {row['meta'].get('question_type')}\n"
                 f"Task type: {task_plan['task_type']}\n"
@@ -990,12 +1134,16 @@ def _default_answer_from_trace(row: dict[str, Any]) -> str:
 async def _judge_row_async(row: dict[str, Any], llm: LLM) -> dict[str, Any]:
     messages = _judge_messages(row)
     parsed = await achat_json(llm, messages, temperature=0.0)
-    return _parse_judge(parsed)
+    return _parse_judge(row, parsed)
 
 
 def _judge_messages(row: dict[str, Any]) -> list[dict[str, str]]:
     teacher_bundle = row["hidden"]["teacher_bundle"]
     task_plan = row["hidden"]["task_plan"]
+    source_language = language_name(row["meta"]["source_language"])
+    prompt_language = language_name(row["meta"]["prompt_language"])
+    reasoning_language = language_name(row["meta"]["reasoning_language"])
+    target_language = language_name(row["meta"]["target_language"])
     source_snippets = "\n\n".join(
         f"- {source['title']}: {source['snippet']}"
         for source in row["sources"][:3]
@@ -1005,10 +1153,17 @@ def _judge_messages(row: dict[str, Any]) -> list[dict[str, str]]:
             "role": "system",
             "content": (
                 "You judge synthetic memorization examples. "
-                "Return strict JSON with keys pass, support, leakage, style_distinct, reasoning_quality, and reason. "
+                "Return strict JSON with keys pass, support, leakage, style_distinct, reasoning_quality, "
+                "language_match, language_natural, and reason. "
                 "pass must be true only if the answer is supported, the prompt does not trivially leak it, "
                 "the reasoning is grounded, the query is not just a bland default definition question, "
-                "and the target is a complete natural-language answer rather than a bare span."
+                "and the target is a complete natural-language answer rather than a bare span. "
+                f"The hidden evidence is in {source_language}. The visible prompt is in {prompt_language}, "
+                f"the visible reasoning is in {reasoning_language}, and the visible answer is in {target_language}. "
+                "For cross-language rows, language_match should be true only if the visible prompt, reasoning, and answer are actually in their declared languages. "
+                "For cross-language rows, language_natural should be true only if the visible prompt, reasoning, and answer are idiomatic in those languages, "
+                "avoid mixed-language phrasing, avoid obvious literal translation artifacts, and handle names, titles, and institutions carefully. "
+                "Do not directly translate names or work titles unless there is a clearly established local form. If the local form is unclear, keep the original name."
             ),
         },
         {
@@ -1032,19 +1187,33 @@ def _judge_messages(row: dict[str, Any]) -> list[dict[str, str]]:
     ]
 
 
-def _parse_judge(parsed: dict[str, Any]) -> dict[str, Any]:
+def _parse_judge(row: dict[str, Any], parsed: dict[str, Any]) -> dict[str, Any]:
+    if row["meta"].get("language_mode") == "cross_language":
+        assert "language_match" in parsed, "judge language_match must be present for cross-language rows"
+        assert "language_natural" in parsed, "judge language_natural must be present for cross-language rows"
+    language_quality = bool(parsed.get("language_match", True)) and bool(parsed.get("language_natural", True))
     return {
         "pass": bool(parsed.get("pass", False)),
         "support": bool(parsed.get("support", False)),
         "leakage": bool(parsed.get("leakage", False)),
         "style_distinct": bool(parsed.get("style_distinct", parsed.get("diversity", False))),
         "reasoning_quality": bool(parsed.get("reasoning_quality", False)),
+        "language_match": bool(parsed.get("language_match", True)),
+        "language_natural": bool(parsed.get("language_natural", True)),
+        "language_quality": language_quality,
         "reason": str(parsed.get("reason", "")).strip(),
     }
 
 
 def _default_key_question(row: dict[str, Any]) -> str:
+    reasoning_language = row["meta"]["reasoning_language"]
     task_type = row["hidden"]["task_plan"]["task_type"]
+    if reasoning_language == "da":
+        if task_type in {"reverse_definition", "source_clue", "identification"}:
+            return "Hvilken artikel eller titel bliver entydigt identificeret af ledetråden?"
+        if task_type in {"overview", "planning", "comparison", "timeline", "explanation"}:
+            return "Hvilke huskede pointer er nødvendige for at opfylde brugerens mål?"
+        return "Hvilket husket faktamønster løser bedst prompten?"
     if task_type in {"reverse_definition", "source_clue", "identification"}:
         return "Which article title is uniquely identified by the clue?"
     if task_type in {"overview", "planning", "comparison", "timeline", "explanation"}:
@@ -1052,7 +1221,26 @@ def _default_key_question(row: dict[str, Any]) -> str:
     return "Which remembered fact pattern best resolves the prompt?"
 
 
+def _language_generation_guidance(language: str) -> str:
+    if language == "da":
+        return (
+            "Write idiomatic natural Danish. Avoid mixed English-Danish phrasing, literal translation artifacts, "
+            "and stray English fragments unless they are established names or titles. Do not directly translate names, work titles, "
+            "or institutions unless there is a clearly established Danish form. If the Danish form is unclear, keep the original name. "
+            "Use standard Danish casing and grammar."
+        )
+    return (
+        "Write idiomatic natural English. Avoid translated-sounding phrasing and awkward mixed-language wording. "
+        "Do not directly translate names, work titles, or institutions unless there is a clearly established English form. "
+        "If the English form is unclear, keep the original name."
+    )
+
+
 def _default_synthesis(row: dict[str, Any], target: str) -> str:
+    if row["meta"]["reasoning_language"] == "da":
+        if target:
+            return f"Svaret er {target}, fordi det er den huskede oplysning, der løser prompten."
+        return "Svaret skal komme fra det huskede faktamønster, ikke fra fri parafrase."
     if target:
         return f"The answer is {target} because that is the remembered fact that resolves the prompt."
     return "The answer has to come from the remembered fact pattern, not from free paraphrase."
@@ -1163,6 +1351,7 @@ def _memorization_settings(cfg: dict[str, Any]) -> MemorizationSettings:
         ),
         "planning_claims": _positive_int(memorization_cfg, "planning_claims", default=6),
         "use_llm": _bool_value(memorization_cfg, "use_llm", default=True),
+        "language_plan": load_language_plan(cfg),
     }
 
 

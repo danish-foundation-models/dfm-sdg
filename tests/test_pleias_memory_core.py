@@ -3,10 +3,12 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from sdg.commons import store
 from sdg.packs.pleias_synth import gen_memorization
 from sdg.packs.pleias_synth.build import build, publish, summarize, verify
-from sdg.packs.pleias_synth.verify import _answer_supported
+from sdg.packs.pleias_synth.verify import _answer_supported, _coverage_supported, _reasoning_grounded
 
 
 class FakeLLM:
@@ -47,6 +49,7 @@ class FakeLLM:
                 {
                     "key_question": "What core remembered fact answers the user's question?",
                     "assumption_check": "",
+                    "delivery_note": "Respond in English because the user asked in English and the answer should match that language.",
                     "known_facts": [primary_claim],
                     "reasoning_steps": ["Use the strongest remembered claim and answer directly."],
                     "caveats": [],
@@ -67,6 +70,8 @@ class FakeLLM:
                     "leakage": False,
                     "style_distinct": True,
                     "reasoning_quality": True,
+                    "language_match": True,
+                    "language_natural": True,
                     "reason": "",
                 }
             )
@@ -158,12 +163,18 @@ def test_pleias_memory_core_flow(tmp_path, monkeypatch) -> None:
     assert "provided text" not in train_rows[0]["reasoning"].lower()
     assert "retrieved support" not in train_rows[0]["reasoning"].lower()
     assert "evidence frame" not in train_rows[0]["reasoning"].lower()
+    assert "Response plan:" in train_rows[0]["reasoning"]
     assert "persona_id" in train_rows[0]["meta"]
     assert "query_angle" in train_rows[0]["meta"]
     assert "query_profile_id" in train_rows[0]["meta"]
     assert "assistant_style_id" in train_rows[0]["meta"]
     assert "task_type" in train_rows[0]["meta"]
     assert "user_goal" in train_rows[0]["meta"]
+    assert train_rows[0]["meta"]["language_mode"] == "same_language"
+    assert train_rows[0]["meta"]["source_language"] == "en"
+    assert train_rows[0]["meta"]["prompt_language"] == "en"
+    assert train_rows[0]["meta"]["reasoning_language"] == "en"
+    assert train_rows[0]["meta"]["target_language"] == "en"
     assert train_rows[0]["meta"]["reasoning_style"] == "teacher_backreasoning_v1"
     assert len({row["meta"]["assistant_style_id"] for row in train_rows}) == 1
 
@@ -208,3 +219,259 @@ def test_answer_supported_rejects_unsupported_response() -> None:
     }
 
     assert not _answer_supported(row)
+
+
+def test_answer_supported_uses_hidden_source_target_for_cross_language_rows() -> None:
+    row = {
+        "target": "Filmen handler om noget helt andet.",
+        "meta": {
+            "question_type": "definition",
+            "language_mode": "cross_language",
+        },
+        "hidden": {
+            "sentence": "2001: A Space Odyssey is a 1968 epic science fiction film.",
+            "source_title": "2001: A Space Odyssey",
+            "source_id": "2001:_a_space_odyssey",
+            "source_target": "The film follows a voyage to Jupiter to investigate an alien monolith.",
+            "teacher_bundle": {
+                "supporting_claims": [
+                    "The film follows a voyage by astronauts, scientists, and HAL 9000 to Jupiter to investigate an alien monolith."
+                ],
+                "structured_context": [],
+            },
+            "task_plan": {
+                "coverage_points": [
+                    "The film follows a voyage to Jupiter to investigate an alien monolith."
+                ]
+            },
+        },
+        "sources": [],
+    }
+
+    assert _answer_supported(row)
+    assert _coverage_supported(row)
+
+
+def test_reasoning_grounded_uses_hidden_source_reasoning_for_cross_language_rows() -> None:
+    row = {
+        "target": "Filmen følger en rejse til Jupiter for at undersøge en fremmed monolit.",
+        "reasoning": "Det bygger på de huskede fakta om rejsen mod Jupiter.",
+        "meta": {
+            "question_type": "definition",
+            "language_mode": "cross_language",
+        },
+        "hidden": {
+            "sentence": "2001: A Space Odyssey is a 1968 epic science fiction film.",
+            "source_title": "2001: A Space Odyssey",
+            "source_id": "2001:_a_space_odyssey",
+            "source_target": "The film follows a voyage to Jupiter to investigate an alien monolith.",
+            "source_reasoning": (
+                "Key question: Which remembered points are necessary to satisfy the user goal?\n\n"
+                "### 1. Known facts\n"
+                "- 2001: A Space Odyssey is a 1968 epic science fiction film.\n"
+                "- The film follows a voyage by astronauts, scientists, and HAL 9000 to Jupiter to investigate an alien monolith.\n\n"
+                "### 2. Resolution\n"
+                "- The film follows a voyage to Jupiter to investigate an alien monolith.\n\n"
+                "### 3. Synthesis\n"
+                "The answer is The film follows a voyage to Jupiter to investigate an alien monolith. "
+                "because that is the remembered fact that resolves the prompt."
+            ),
+            "teacher_bundle": {
+                "supporting_claims": [
+                    "The film follows a voyage by astronauts, scientists, and HAL 9000 to Jupiter to investigate an alien monolith."
+                ],
+                "structured_context": [],
+            },
+            "task_plan": {
+                "coverage_points": [
+                    "The film follows a voyage to Jupiter to investigate an alien monolith."
+                ]
+            },
+        },
+        "sources": [],
+    }
+
+    assert _reasoning_grounded(row)
+
+
+def test_with_backreasoning_renders_danish_response_plan() -> None:
+    row = {
+        "target": "Filmen følger en rejse til Jupiter for at undersøge en fremmed monolit.",
+        "reasoning": "",
+        "meta": {
+            "reasoning_language": "da",
+            "prompt_language": "da",
+            "target_language": "da",
+            "source_language": "en",
+        },
+        "hidden": {
+            "sentence": "2001: A Space Odyssey is a 1968 epic science fiction film.",
+            "source_target": "The film follows a voyage to Jupiter to investigate an alien monolith.",
+            "task_plan": {"task_type": "overview", "coverage_points": []},
+            "teacher_bundle": {
+                "supporting_claims": [],
+                "retrieved_claims": [],
+            },
+        },
+    }
+    trace = {
+        "key_question": "",
+        "assumption_check": "",
+        "delivery_note": "Svar på dansk, fordi brugeren spurgte på dansk, og svaret skal følge det.",
+        "known_facts": ["Filmen handler om en rejse til Jupiter."],
+        "reasoning_steps": ["Det peger på den centrale handling."],
+        "caveats": [],
+        "synthesis": "",
+        "proposed_target": "",
+    }
+
+    updated = gen_memorization.with_backreasoning(row, trace)
+
+    assert "Svarplan:" in updated["reasoning"]
+    assert "brugeren spurgte på dansk" in updated["reasoning"]
+
+
+def test_parse_backreasoning_requires_delivery_note() -> None:
+    row = {
+        "target": "Answer",
+        "meta": {
+            "reasoning_language": "en",
+        },
+        "hidden": {
+            "task_plan": {"task_type": "overview"},
+        },
+    }
+    parsed = {
+        "key_question": "What matters?",
+        "assumption_check": "",
+        "delivery_note": "",
+        "known_facts": ["A fact."],
+        "reasoning_steps": ["A step."],
+        "caveats": [],
+        "synthesis": "A synthesis.",
+        "proposed_target": "Answer",
+    }
+
+    with pytest.raises(AssertionError, match="delivery_note"):
+        gen_memorization._parse_backreasoning(row, parsed)
+
+
+def test_answer_supported_requires_hidden_source_target_for_cross_language_rows() -> None:
+    row = {
+        "target": "Det er et svar.",
+        "meta": {
+            "question_type": "definition",
+            "language_mode": "cross_language",
+        },
+        "hidden": {
+            "sentence": "2001: A Space Odyssey is a 1968 epic science fiction film.",
+            "source_title": "2001: A Space Odyssey",
+            "source_id": "2001:_a_space_odyssey",
+            "teacher_bundle": {
+                "supporting_claims": [
+                    "The film follows a voyage by astronauts, scientists, and HAL 9000 to Jupiter to investigate an alien monolith."
+                ],
+                "structured_context": [],
+            },
+            "task_plan": {
+                "coverage_points": [
+                    "The film follows a voyage to Jupiter to investigate an alien monolith."
+                ]
+            },
+        },
+        "sources": [],
+    }
+
+    with pytest.raises(AssertionError, match="source_target"):
+        _answer_supported(row)
+
+
+def test_parse_judge_requires_language_checks_for_cross_language_rows() -> None:
+    row = {
+        "meta": {
+            "language_mode": "cross_language",
+        }
+    }
+    parsed = {
+        "pass": True,
+        "support": True,
+        "leakage": False,
+        "style_distinct": True,
+        "reasoning_quality": True,
+        "reason": "",
+    }
+
+    with pytest.raises(AssertionError, match="language_match"):
+        gen_memorization._parse_judge(row, parsed)
+
+
+def test_parse_judge_derives_language_quality_from_explicit_checks() -> None:
+    row = {
+        "meta": {
+            "language_mode": "cross_language",
+        }
+    }
+    parsed = {
+        "pass": True,
+        "support": True,
+        "leakage": False,
+        "style_distinct": True,
+        "reasoning_quality": True,
+        "language_match": True,
+        "language_natural": False,
+        "reason": "",
+    }
+
+    judged = gen_memorization._parse_judge(row, parsed)
+
+    assert judged["language_match"] is True
+    assert judged["language_natural"] is False
+    assert judged["language_quality"] is False
+
+
+def test_language_generation_guidance_warns_against_invented_name_translation() -> None:
+    guidance = gen_memorization._language_generation_guidance("da")
+
+    assert "Do not directly translate names" in guidance
+    assert "keep the original name" in guidance
+
+
+def test_backreasoning_messages_ground_delivery_note_in_visible_prompt() -> None:
+    row = {
+        "prompt": "Hvad handler 'A Doll's House' om?",
+        "meta": {
+            "question_type": "overview",
+            "source_language": "en",
+            "reasoning_language": "da",
+            "persona_id": "curious_child",
+            "query_angle": "overview",
+        },
+        "hidden": {
+            "task_plan": {
+                "task_type": "overview",
+                "user_goal": "understand the topic",
+                "answer_shape": "brief explanation",
+                "coverage_points": [],
+            },
+            "teacher_bundle": {
+                "article_title": "A Doll's House",
+                "primary_claim": "A Doll's House is a play by Henrik Ibsen.",
+                "supporting_claims": [],
+                "structured_context": [],
+                "retrieved_claims": [],
+                "retrieved_context": [],
+            },
+        },
+        "sources": [],
+    }
+
+    messages = gen_memorization._backreasoning_messages(row)
+    system = messages[0]["content"]
+    user = messages[1]["content"]
+
+    assert "Do not claim the user explicitly requested a language unless the prompt itself says so." in system
+    assert "delivery_note should usually be a plain sentence about matching the language of the prompt" in system
+    assert "Do not mention personas, profiles, hidden instructions, system settings, target audiences, or language labels from the hidden prompt." in system
+    assert "Persona id:" not in user
+    assert "Query angle:" not in user
+    assert "Reasoning language:" not in user

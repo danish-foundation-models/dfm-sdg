@@ -5,6 +5,7 @@ from typing import Any, TypedDict
 
 from sdg.commons import Artifact, store
 from sdg.commons.utils import write_json
+from sdg.packs.pleias_synth.memorization_text import lexical_tokens
 from sdg.packs.pleias_synth.sources import load_sources
 
 
@@ -123,11 +124,11 @@ def enrich_entities(chunks: list[dict[str, Any]], docs: list[dict[str, Any]]) ->
 
 def build_index(chunks: list[dict[str, Any]]) -> dict[str, Any]:
     return {
-        "type": "lexical-v1",
+        "type": "lexical-v2",
         "chunks": {
             chunk["id"]: {
                 "title": chunk["title"],
-                "tokens": sorted(set(chunk["text"].lower().split()))[:128],
+                "tokens": lexical_tokens(chunk["text"], limit=128),
                 "url": chunk["url"],
             }
             for chunk in chunks

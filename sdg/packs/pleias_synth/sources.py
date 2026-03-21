@@ -10,6 +10,7 @@ from urllib.request import Request, urlopen
 
 from sdg.commons import store
 from sdg.commons.utils import artifacts_root, iso_timestamp, read_json, write_json
+from sdg.packs.pleias_synth.languages import LanguageCode, source_language_from_memory_cfg
 from sdg.packs.pleias_synth.record_loader import as_records
 from sdg.packs.pleias_synth.types import Record
 
@@ -34,12 +35,14 @@ class InlineDocsSourceConfig(TypedDict):
     kind: Literal["inline_docs"]
     docs: list[Record]
     default_license: str
+    source_language: LanguageCode
 
 
 class PathDocsSourceConfig(TypedDict):
     kind: Literal["path"]
     path: Path
     default_license: str
+    source_language: LanguageCode
 
 
 MemorySourceConfig = WikipediaSourceConfig | InlineDocsSourceConfig | PathDocsSourceConfig
@@ -58,6 +61,7 @@ def load_sources(cfg: dict[str, Any]) -> list[dict[str, Any]]:
                     default_source="inline",
                     default_license=source_config["default_license"],
                     default_dataset="inline",
+                    default_language=source_config["source_language"],
                 )
                 for index, doc in enumerate(source_config["docs"])
             ]
@@ -549,6 +553,7 @@ def _memory_source_config(cfg: dict[str, Any]) -> MemorySourceConfig:
             "kind": "inline_docs",
             "docs": as_records(inline_docs, label="memory_core inline_docs"),
             "default_license": _optional_str(memory_cfg, "default_license", default="unknown"),
+            "source_language": source_language_from_memory_cfg(memory_cfg),
         }
 
     assert source_path is not None, "memory_core source_path is required"
@@ -559,6 +564,7 @@ def _memory_source_config(cfg: dict[str, Any]) -> MemorySourceConfig:
         "kind": "path",
         "path": path,
         "default_license": _optional_str(memory_cfg, "default_license", default="unknown"),
+        "source_language": source_language_from_memory_cfg(memory_cfg),
     }
 
 
@@ -570,7 +576,7 @@ def _wikipedia_source_config(memory_cfg: Record) -> WikipediaSourceConfig:
 
     return {
         "kind": "wikipedia_vital_articles",
-        "language": _optional_str(memory_cfg, "language", default="en"),
+        "language": source_language_from_memory_cfg(memory_cfg),
         "vital_level": _positive_int(memory_cfg, "vital_level", default=4),
         "max_articles": _optional_positive_int(memory_cfg, "max_articles"),
         "refresh": _bool_value(memory_cfg, "refresh", default=False),
@@ -592,6 +598,7 @@ def _load_path_docs(source_config: PathDocsSourceConfig) -> list[dict[str, Any]]
                 default_source=str(path),
                 default_license=source_config["default_license"],
                 default_dataset="path",
+                default_language=source_config["source_language"],
             )
             for index, doc in enumerate(docs)
         ]
@@ -604,6 +611,7 @@ def _load_path_docs(source_config: PathDocsSourceConfig) -> list[dict[str, Any]]
                 default_source=str(path),
                 default_license=source_config["default_license"],
                 default_dataset="path",
+                default_language=source_config["source_language"],
             )
             for index, doc in enumerate(docs)
         ]
@@ -623,6 +631,7 @@ def _load_path_docs(source_config: PathDocsSourceConfig) -> list[dict[str, Any]]
             default_source=str(path),
             default_license=source_config["default_license"],
             default_dataset="local_file",
+            default_language=source_config["source_language"],
         )
     ]
 
@@ -634,11 +643,16 @@ def _normalize_doc(
     default_source: str,
     default_license: str,
     default_dataset: str,
+    default_language: LanguageCode,
 ) -> dict[str, Any]:
     doc_id = _optional_str(doc, "id", default=f"doc-{index:05d}")
     meta = _meta(doc)
     if "dataset" not in meta:
         meta["dataset"] = default_dataset
+    if "language" in meta:
+        assert meta["language"] == default_language, "document meta.language must match memory_core source language"
+    else:
+        meta["language"] = default_language
 
     return {
         "id": doc_id,

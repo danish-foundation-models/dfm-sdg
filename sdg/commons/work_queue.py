@@ -51,6 +51,45 @@ async def map_async_ordered(
     progress: ProgressFn | None = None,
     total: int | None = None,
 ) -> AsyncIterator[Result]:
+    async for value in _map_async(
+        items,
+        worker,
+        concurrency=concurrency,
+        progress=progress,
+        total=total,
+        ordered=True,
+    ):
+        yield value
+
+
+async def map_async_unordered(
+    items: Iterable[Item],
+    worker: WorkerFn[Item, Result],
+    *,
+    concurrency: int,
+    progress: ProgressFn | None = None,
+    total: int | None = None,
+) -> AsyncIterator[Result]:
+    async for value in _map_async(
+        items,
+        worker,
+        concurrency=concurrency,
+        progress=progress,
+        total=total,
+        ordered=False,
+    ):
+        yield value
+
+
+async def _map_async(
+    items: Iterable[Item],
+    worker: WorkerFn[Item, Result],
+    *,
+    concurrency: int,
+    progress: ProgressFn | None,
+    total: int | None,
+    ordered: bool,
+) -> AsyncIterator[Result]:
     worker_count = max(concurrency, 1)
     queue_size = max(worker_count * 2, 1)
     known_total = total if total is not None else _known_total(items)
@@ -77,6 +116,17 @@ async def map_async_ordered(
             message = await completed.get()
             match message:
                 case _WorkResult(index=index, value=value):
+                    if not ordered:
+                        yield value
+                        completed_count += 1
+                        if progress is not None:
+                            progress(
+                                completed_count,
+                                _producer_total(producer, known_total),
+                                int(time.monotonic() - started_at),
+                            )
+                        continue
+
                     buffered[index] = value
                     while next_index in buffered:
                         yield buffered.pop(next_index)

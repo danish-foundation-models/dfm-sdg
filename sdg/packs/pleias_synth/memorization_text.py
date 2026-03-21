@@ -3,6 +3,30 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from sdg.packs.pleias_synth.languages import LanguageCode
+
+TOKEN_PATTERN = re.compile(r"[^\W_]+", flags=re.UNICODE)
+
+STOPWORDS: dict[LanguageCode, set[str]] = {
+    "en": {"and", "the", "for", "with", "from", "that", "this", "was", "are"},
+    "da": {"og", "det", "den", "der", "som", "med", "for", "til", "fra", "var"},
+}
+
+DESCRIPTION_MARKERS: dict[LanguageCode, tuple[str, ...]] = {
+    "en": ("physicist", "chemist", "writer", "politician", "artist", "actor", "philosopher", "scientist"),
+    "da": ("fysiker", "kemiker", "forfatter", "politiker", "kunstner", "skuespiller", "filosof", "forsker"),
+}
+
+PERSON_MARKERS: dict[LanguageCode, tuple[str, ...]] = {
+    "en": ("births", "deaths", "people", "actors", "actresses", "writers", "scientists", "philosophers", "politicians", "artists"),
+    "da": ("fødsler", "dødsfald", "personer", "skuespillere", "forfattere", "forskere", "filosoffer", "politikere", "kunstnere"),
+}
+
+INFOBOX_MARKERS: dict[LanguageCode, tuple[str, ...]] = {
+    "en": ("infobox person", "infobox scientist"),
+    "da": ("infoboks person", "infoboks forsker"),
+}
+
 
 def split_sentences(text: str) -> list[str]:
     collapsed = re.sub(r"\s+", " ", text.strip())
@@ -12,7 +36,14 @@ def split_sentences(text: str) -> list[str]:
 
 
 def tokenize(text: str) -> list[str]:
-    return re.findall(r"[a-z0-9]+", text.lower())
+    return TOKEN_PATTERN.findall(text.casefold())
+
+
+def lexical_tokens(text: str, *, limit: int | None = None) -> list[str]:
+    tokens = sorted(set(tokenize(text)))
+    if limit is None:
+        return tokens
+    return tokens[:limit]
 
 
 def normalize_text(text: str) -> str:
@@ -76,11 +107,12 @@ def clean_recall_text(text: str) -> str:
     return cleaned.strip(" -")
 
 
-def meaningful_tokens(text: str) -> set[str]:
+def meaningful_tokens(text: str, *, language: LanguageCode = "en") -> set[str]:
+    stopwords = STOPWORDS[language]
     return {
         token
-        for token in normalize_text(text).split()
-        if len(token) > 2 and token not in {"and", "the"}
+        for token in tokenize(text)
+        if len(token) > 2 and token not in stopwords
     }
 
 
@@ -94,38 +126,23 @@ def title_variants(title: str) -> list[str]:
 def is_person(doc: dict[str, Any]) -> bool:
     meta = doc.get("meta") or {}
     structured = meta.get("structured_wikipedia") or {}
+    language = _language(meta)
     categories = [category.lower() for category in structured.get("categories", [])]
     description = str((meta.get("wikidata") or {}).get("description") or meta.get("wikibase_shortdesc") or "").lower()
     infoboxes = [name.lower() for name in structured.get("infobox_templates", [])]
 
-    person_markers = [
-        "births",
-        "deaths",
-        "people",
-        "actors",
-        "actresses",
-        "writers",
-        "scientists",
-        "philosophers",
-        "politicians",
-        "artists",
-    ]
-    if any(
-        marker in description
-        for marker in [
-            "physicist",
-            "chemist",
-            "writer",
-            "politician",
-            "artist",
-            "actor",
-            "philosopher",
-            "scientist",
-        ]
-    ):
+    if any(marker in description for marker in DESCRIPTION_MARKERS[language]):
         return True
-    if any(marker in category for category in categories for marker in person_markers):
+    if any(marker in category for category in categories for marker in PERSON_MARKERS[language]):
         return True
-    if any("infobox person" in name or "infobox scientist" in name for name in infoboxes):
+    if any(marker in name for name in infoboxes for marker in INFOBOX_MARKERS[language]):
         return True
     return False
+
+
+def _language(meta: dict[str, Any]) -> LanguageCode:
+    value = meta.get("language")
+    if value is None:
+        return "en"
+    assert value in STOPWORDS, f"Unsupported document language: {value}"
+    return value

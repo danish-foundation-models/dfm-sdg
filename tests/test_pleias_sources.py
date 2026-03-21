@@ -131,3 +131,19 @@ def test_fetch_wikipedia_docs_fetches_each_title(monkeypatch) -> None:
     assert requested_titles == ["Accordion", "Academy Awards"]
     assert [doc["title"] for doc in docs] == ["Accordion", "Academy Awards"]
     assert [doc["text"] for doc in docs] == ["Accordion text", "Academy Awards text"]
+
+
+def test_load_sources_assigns_source_language_to_path_docs(tmp_path) -> None:
+    path = tmp_path / "docs.jsonl"
+    path.write_text('{"id":"doc-1","title":"Hej","text":"Hej verden"}\n')
+
+    docs = sources.load_sources(
+        {
+            "memory_core": {
+                "source_path": str(path),
+                "source_language": "da",
+            }
+        }
+    )
+
+    assert docs[0]["meta"]["language"] == "da"

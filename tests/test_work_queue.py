@@ -4,7 +4,7 @@ import asyncio
 
 import pytest
 
-from sdg.commons.work_queue import map_async_ordered
+from sdg.commons.work_queue import map_async_ordered, map_async_unordered
 
 
 def test_map_async_ordered_preserves_order_and_reports_total() -> None:
@@ -59,3 +59,17 @@ def test_map_async_ordered_raises_worker_errors() -> None:
 
     with pytest.raises(ValueError, match="bad item"):
         asyncio.run(run())
+
+
+def test_map_async_unordered_yields_completed_results_immediately() -> None:
+    async def run() -> list[int]:
+        async def worker(index: int, item: int) -> int:
+            await asyncio.sleep(0.03 if item == 0 else 0.01)
+            return item * 10
+
+        rows: list[int] = []
+        async for row in map_async_unordered([0, 1], worker, concurrency=2):
+            rows.append(row)
+        return rows
+
+    assert asyncio.run(run()) == [10, 0]

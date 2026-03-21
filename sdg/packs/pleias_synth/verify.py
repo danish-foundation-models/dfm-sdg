@@ -6,6 +6,7 @@ from sdg.commons import eval as common_eval
 from sdg.packs.pleias_synth.memorization_filters import (
     row_answer_supported,
     row_coverage_supported,
+    row_language_quality,
     row_reasoning_grounded,
     row_retrieval_grounded,
 )
@@ -80,6 +81,7 @@ def verify_memorization(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]
     verified = common_eval.verify(verified, _answer_supported, name="answer_supported")
     verified = common_eval.verify(verified, _coverage_supported, name="coverage_supported")
     verified = common_eval.verify(verified, _answer_not_leaked, name="answer_not_leaked")
+    verified = common_eval.verify(verified, _language_quality, name="language_quality")
     verified = common_eval.verify(verified, _judge_pass, name="judge_pass")
 
     metrics = common_eval.aggregate_metrics(verified)
@@ -124,6 +126,10 @@ def _judge_pass(row: dict[str, Any]) -> bool:
     if not judge:
         return True
     return bool(judge.get("pass", False))
+
+
+def _language_quality(row: dict[str, Any]) -> bool:
+    return row_language_quality(row)
 
 
 def _question_type_counts(rows: list[dict[str, Any]]) -> dict[str, int]:
