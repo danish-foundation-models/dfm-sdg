@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from sdg.packs.pleias_synth.assistant_styles import load_assistant_style
-from sdg.packs.pleias_synth.personas import build_query_plans, load_personas
-from sdg.packs.pleias_synth.query_profiles import load_query_profiles
+from sdg.packs.synth.assistant_styles import load_assistant_style
+from sdg.packs.synth.personas import build_query_plans, load_personas
+from sdg.packs.synth.query_profiles import load_query_profiles
 
 
 def test_starter_personas_load_by_default() -> None:
@@ -77,7 +77,7 @@ def test_starter_query_profiles_load_by_default() -> None:
 
 def test_starter_assistant_style_loads_by_default() -> None:
     style = load_assistant_style({"generation": {"memorization": {}}})
-    assert style["style_id"] == "pleias_assistant"
+    assert style["style_id"] == "synth_assistant"
     assert style["source"].startswith("preset:")
     assert style["instructions"]
     assert "minimal formatting" in style["formatting_style"]

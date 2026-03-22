@@ -1,7 +1,0 @@
-name: pleias_synth
-description: PleIAs SYNTH pack in progress, starting with the memory-core build path.
-entrypoints:
-  build: sdg.packs.pleias_synth.build:build
-  verify: sdg.packs.pleias_synth.build:verify
-  summarize: sdg.packs.pleias_synth.build:summarize
-  publish: sdg.packs.pleias_synth.build:publish

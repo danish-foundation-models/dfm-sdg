@@ -1,0 +1,8 @@
+name: synth
+description: SYNTH-style pack in progress, starting with the memory-core build path.
+entrypoints:
+  build: sdg.packs.synth.build:build
+  verify: sdg.packs.synth.build:verify
+  summarize: sdg.packs.synth.build:summarize
+  publish: sdg.packs.synth.build:publish
+  viewer: sdg.packs.synth.viewer:viewer_spec

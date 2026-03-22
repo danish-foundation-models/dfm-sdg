@@ -2,8 +2,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import httpx
+
 from sdg.commons.run import load, progress, read_events
 from sdg.commons.utils import read_yaml
+from sdg.commons.viewer import render_run_view, start_viewer_server
 from sdg.packs.demo.build import build, publish, summarize, verify
 
 
@@ -36,6 +39,37 @@ def test_demo_pack_end_to_end(tmp_path, monkeypatch) -> None:
     summary = summarize(first.run_id)
     assert summary["rows"] == cfg["generation"]["count"]
     assert summary["metrics"]["checks"]["answer_correct"]["failed"] == 0
+
+    view = render_run_view(first.run_id, limit=10)
+    viewer_path = Path(view["out_path"])
+    assert view["default_artifact"] == "dataset"
+    assert viewer_path.exists()
+    viewer_html = viewer_path.read_text()
+    assert "Add " in viewer_html
+    assert "Rows per page" in viewer_html
+    assert "section-markdown" in viewer_html
+
+    running = start_viewer_server(first.run_id, host="127.0.0.1", port=0)
+    try:
+        with httpx.Client(base_url=running.base_url, timeout=5.0) as client:
+            run_payload = client.get("/api/run").json()
+            assert run_payload["default_artifact"] == "dataset"
+            progress_payload = client.get("/api/progress").json()
+            assert progress_payload["status"] == "completed"
+            assert "artifacts" in progress_payload
+            page = client.get(
+                "/api/artifact",
+                params={"name": "dataset", "page": 1, "page_size": 5},
+            ).json()
+            assert page["artifact"]["name"] == "dataset"
+            assert page["filtered_count"] == cfg["generation"]["count"]
+            assert len(page["items"]) == 5
+            assert page["items"][0]["sections"][0]["format"] in {"plain", "code", "markdown"}
+            html = client.get("/").text
+            assert "Copy Row JSON" in html
+            assert "section-markdown" in html
+    finally:
+        running.close()
 
     published = publish(first.run_id)
     out_dir = Path(published["out_dir"])

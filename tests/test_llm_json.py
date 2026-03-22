@@ -4,7 +4,7 @@ import asyncio
 import json
 
 from sdg.commons.run_log import activate_run_log
-from sdg.packs.pleias_synth.llm_json import achat_json, chat_json, parse_json_response
+from sdg.packs.synth.llm_json import achat_json, chat_json, parse_json_response
 
 
 def test_parse_json_response_handles_fenced_json() -> None:

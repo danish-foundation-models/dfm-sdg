@@ -8,6 +8,7 @@ from typing import Any
 from sdg.commons.registry import find_pack_for_path, list_packs, load_pack
 from sdg.commons.run import compare, load, progress, read_events
 from sdg.commons.utils import read_yaml
+from sdg.commons.viewer import render_run_view, start_viewer_server
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -37,6 +38,23 @@ def main(argv: list[str] | None = None) -> int:
             args.target,
             include_model_events=args.include_model_events,
             limit=args.limit,
+        )
+
+    if args.command == "view":
+        return _run_view(
+            args.target,
+            artifact=args.artifact,
+            limit=args.limit,
+            out_path=args.out,
+        )
+
+    if args.command == "serve":
+        return _run_serve(
+            args.target,
+            artifact=args.artifact,
+            host=args.host,
+            port=args.port,
+            open_browser=args.open,
         )
 
     if args.command == "list-packs":
@@ -78,6 +96,19 @@ def _build_parser() -> argparse.ArgumentParser:
     progress_parser.add_argument("target")
     progress_parser.add_argument("--include-model-events", action="store_true")
     progress_parser.add_argument("--limit", type=int, default=20)
+
+    view_parser = subparsers.add_parser("view")
+    view_parser.add_argument("target")
+    view_parser.add_argument("--artifact")
+    view_parser.add_argument("--limit", type=int, default=200)
+    view_parser.add_argument("--out")
+
+    serve_parser = subparsers.add_parser("serve")
+    serve_parser.add_argument("target")
+    serve_parser.add_argument("--artifact")
+    serve_parser.add_argument("--host", default="127.0.0.1")
+    serve_parser.add_argument("--port", type=int, default=0)
+    serve_parser.add_argument("--open", action="store_true")
 
     subparsers.add_parser("list-packs")
 
@@ -138,6 +169,36 @@ def _run_events(target: str, *, component: str | None, limit: int | None) -> int
 
 def _run_progress(target: str, *, include_model_events: bool, limit: int) -> int:
     _print_json(progress(target, include_model_events=include_model_events, limit=limit))
+    return 0
+
+
+def _run_view(target: str, *, artifact: str | None, limit: int, out_path: str | None) -> int:
+    _print_json(render_run_view(target, artifact_name=artifact, limit=limit, out_path=out_path))
+    return 0
+
+
+def _run_serve(
+    target: str,
+    *,
+    artifact: str | None,
+    host: str,
+    port: int,
+    open_browser: bool,
+) -> int:
+    running = start_viewer_server(
+        target,
+        artifact_name=artifact,
+        host=host,
+        port=port,
+        open_browser=open_browser,
+    )
+    _print_json({"url": running.base_url, "artifact": artifact})
+    try:
+        running.wait()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        running.close()
     return 0
 
 

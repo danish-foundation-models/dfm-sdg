@@ -18,6 +18,7 @@ class PackSpec:
     verify: Callable[..., Any]
     summarize: Callable[..., Any]
     publish: Callable[..., Any]
+    viewer: Callable[..., Any] | None
 
 
 def list_packs() -> list[str]:
@@ -41,6 +42,7 @@ def load_pack(name: str) -> PackSpec:
         verify=_load_callable(entrypoints["verify"]),
         summarize=_load_callable(entrypoints["summarize"]),
         publish=_load_callable(entrypoints["publish"]),
+        viewer=_load_optional_callable(entrypoints.get("viewer")),
     )
 
 
@@ -58,3 +60,9 @@ def _load_callable(target: str) -> Callable[..., Any]:
     module_name, func_name = target.split(":")
     module = import_module(module_name)
     return getattr(module, func_name)
+
+
+def _load_optional_callable(target: str | None) -> Callable[..., Any] | None:
+    if not target:
+        return None
+    return _load_callable(target)
