@@ -15,7 +15,6 @@ def test_load_language_plan_defaults_to_source_language() -> None:
     }
 
     assert load_language_plan(cfg) == {
-        "kind": "same_language",
         "source": "en",
         "prompt": "en",
         "reasoning": "en",
@@ -40,7 +39,6 @@ def test_load_language_plan_supports_cross_language_rows() -> None:
     }
 
     assert load_language_plan(cfg) == {
-        "kind": "cross_language",
         "source": "en",
         "prompt": "da",
         "reasoning": "en",
@@ -65,7 +63,6 @@ def test_load_language_plan_reads_family_specific_config() -> None:
     }
 
     assert load_language_plan(cfg, family="grounded_qa") == {
-        "kind": "cross_language",
         "source": "en",
         "prompt": "da",
         "reasoning": "da",

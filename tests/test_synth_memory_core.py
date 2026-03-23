@@ -19,12 +19,12 @@ from sdg.packs.synth.grounded_qa_filters import (
     row_filter_reasons,
 )
 from sdg.packs.synth.languages import row_language_mode
-from sdg.packs.synth.verify import (
-    _answer_supported,
-    _coverage_supported,
-    _grounded_qa_citation_supported,
-    _reasoning_grounded,
+from sdg.packs.synth.memorization_filters import (
+    row_answer_supported,
+    row_coverage_supported,
+    row_reasoning_grounded,
 )
+from sdg.packs.synth.verify import _grounded_qa_citation_supported
 
 
 class FakeLLM:
@@ -891,7 +891,7 @@ def test_answer_supported_accepts_full_response() -> None:
         "sources": [],
     }
 
-    assert _answer_supported(row)
+    assert row_answer_supported(row)
 
 
 def test_answer_supported_rejects_unsupported_response() -> None:
@@ -918,7 +918,7 @@ def test_answer_supported_rejects_unsupported_response() -> None:
         "sources": [],
     }
 
-    assert not _answer_supported(row)
+    assert not row_answer_supported(row)
 
 
 def test_answer_supported_uses_hidden_source_target_for_cross_language_rows() -> None:
@@ -951,8 +951,8 @@ def test_answer_supported_uses_hidden_source_target_for_cross_language_rows() ->
         "sources": [],
     }
 
-    assert _answer_supported(row)
-    assert _coverage_supported(row)
+    assert row_answer_supported(row)
+    assert row_coverage_supported(row)
 
 
 def test_reasoning_grounded_uses_hidden_source_reasoning_for_cross_language_rows() -> None:
@@ -997,7 +997,7 @@ def test_reasoning_grounded_uses_hidden_source_reasoning_for_cross_language_rows
         "sources": [],
     }
 
-    assert _reasoning_grounded(row)
+    assert row_reasoning_grounded(row)
 
 
 def test_with_backreasoning_renders_danish_response_plan() -> None:
@@ -1100,7 +1100,7 @@ def test_answer_supported_requires_hidden_source_target_for_cross_language_rows(
     }
 
     with pytest.raises(AssertionError, match="source_target"):
-        _answer_supported(row)
+        row_answer_supported(row)
 
 
 def test_parse_judge_requires_language_checks_for_cross_language_rows() -> None:

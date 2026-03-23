@@ -16,7 +16,7 @@ import pyarrow.parquet as pq
 from markdown import markdown
 
 from sdg.commons.registry import load_pack
-from sdg.commons.run import Artifact, load, progress as load_progress
+from sdg.commons.run import Artifact, load, progress as load_progress, run_status
 
 
 @dataclass
@@ -241,8 +241,8 @@ def _run_manifest(run_dir: Path) -> dict[str, Any]:
 
 
 def _run_is_active(context: _ViewerContext) -> bool:
-    status = _run_manifest(Path(context.run.run_dir)).get("status")
-    return status == "running"
+    manifest = _run_manifest(Path(context.run.run_dir))
+    return run_status(manifest) == "running"
 
 
 def _artifact_view_from_context(
@@ -544,66 +544,55 @@ def _resolve_artifact_view(rows: list[dict[str, Any]], artifact_spec: dict[str, 
 
 
 def _normalize_badges(items: Any) -> list[dict[str, str]]:
-    if not isinstance(items, list):
-        return []
-    badges: list[dict[str, str]] = []
-    for item in items:
-        if isinstance(item, str):
-            badges.append({"path": item, "label": _field_label(item), "tone": "muted"})
-            continue
-        if isinstance(item, dict) and isinstance(item.get("path"), str):
-            badges.append(
-                {
-                    "path": item["path"],
-                    "label": str(item.get("label") or _field_label(item["path"])),
-                    "tone": str(item.get("tone") or "muted"),
-                }
-            )
-    return badges
+    return _normalize_path_specs(items, defaults={"tone": "muted"})
 
 
 def _normalize_filters(items: Any) -> list[dict[str, str]]:
-    if not isinstance(items, list):
-        return []
-    filters: list[dict[str, str]] = []
-    for item in items:
-        if isinstance(item, str):
-            filters.append({"key": item, "path": item, "label": _field_label(item)})
-            continue
-        if isinstance(item, dict) and isinstance(item.get("path"), str):
-            filters.append(
-                {
-                    "key": str(item.get("key") or item["path"]),
-                    "path": item["path"],
-                    "label": str(item.get("label") or _field_label(item["path"])),
-                }
-            )
-    return filters
+    return _normalize_path_specs(items, defaults={"key": "__path__"})
 
 
 def _normalize_sections(items: Any) -> list[dict[str, str]]:
-    if not isinstance(items, list):
-        return []
-    sections: list[dict[str, str]] = []
-    for item in items:
-        if isinstance(item, str):
-            sections.append({"path": item, "label": _field_label(item), "format": "auto"})
-            continue
-        if isinstance(item, dict) and isinstance(item.get("path"), str):
-            sections.append(
-                {
-                    "path": item["path"],
-                    "label": str(item.get("label") or _field_label(item["path"])),
-                    "format": str(item.get("format") or "auto"),
-                }
-            )
-    return sections
+    return _normalize_path_specs(items, defaults={"format": "auto"})
 
 
 def _normalize_search_fields(items: Any) -> list[str]:
     if not isinstance(items, list):
         return []
     return [str(item) for item in items if isinstance(item, str)]
+
+
+def _normalize_path_specs(items: Any, *, defaults: dict[str, str]) -> list[dict[str, str]]:
+    if not isinstance(items, list):
+        return []
+
+    specs: list[dict[str, str]] = []
+    for item in items:
+        spec = _normalize_path_spec(item, defaults=defaults)
+        if spec is not None:
+            specs.append(spec)
+    return specs
+
+
+def _normalize_path_spec(item: Any, *, defaults: dict[str, str]) -> dict[str, str] | None:
+    if isinstance(item, str):
+        path = item
+        data: dict[str, Any] = {}
+    elif isinstance(item, dict) and isinstance(item.get("path"), str):
+        path = item["path"]
+        data = item
+    else:
+        return None
+
+    spec = {
+        "path": path,
+        "label": str(data.get("label") or _field_label(path)),
+    }
+    for key, default in defaults.items():
+        value = data.get(key)
+        if value is None:
+            value = path if default == "__path__" else default
+        spec[key] = str(value)
+    return spec
 
 
 def _viewer_item(row: dict[str, Any], view: dict[str, Any]) -> dict[str, Any]:
@@ -715,70 +704,84 @@ def _value_at_path(row: dict[str, Any], path: str) -> Any:
 
 
 def _default_title_path(rows: list[dict[str, Any]]) -> str:
-    if not rows:
-        return "id"
-    row = rows[0]
-    for path in ("prompt", "title", "id"):
-        if _value_at_path(row, path) is not None:
-            return path
-    return "id"
+    return _first_present_path(rows, ("prompt", "title", "id")) or "id"
 
 
 def _default_subtitle_path(rows: list[dict[str, Any]], title_path: str) -> str:
-    if not rows:
-        return "id"
-    row = rows[0]
-    for path in ("id", "meta.family", "meta.question_type"):
-        if path != title_path and _value_at_path(row, path) is not None:
-            return path
-    return title_path
+    return _first_present_path(
+        rows,
+        (path for path in ("id", "meta.family", "meta.question_type") if path != title_path),
+    ) or title_path
 
 
 def _default_excerpt_path(rows: list[dict[str, Any]], title_path: str) -> str:
+    return _first_present_path(
+        rows,
+        (path for path in ("target", "reasoning", "text") if path != title_path),
+    ) or title_path
+
+
+def _first_present_path(rows: list[dict[str, Any]], paths: Any) -> str | None:
     if not rows:
-        return title_path
+        return None
+
     row = rows[0]
-    for path in ("target", "reasoning", "text"):
-        if path != title_path and _value_at_path(row, path) is not None:
+    for path in paths:
+        if _value_at_path(row, path) is not None:
             return path
-    return title_path
+    return None
 
 
 def _default_badges(rows: list[dict[str, Any]]) -> list[dict[str, str]]:
-    if not rows:
-        return []
-    row = rows[0]
-    badges: list[dict[str, str]] = []
-    for path, tone in (
-        ("meta.family", "blue"),
-        ("meta.question_type", "slate"),
-        ("hidden.generation_filter.reasons", "rose"),
-    ):
-        if _value_at_path(row, path) is not None:
-            badges.append({"path": path, "label": _field_label(path), "tone": tone})
-    return badges
+    return _present_path_specs(
+        rows,
+        [
+            {"path": "meta.family", "tone": "blue"},
+            {"path": "meta.question_type", "tone": "slate"},
+            {"path": "hidden.generation_filter.reasons", "tone": "rose"},
+        ],
+        defaults={"tone": "muted"},
+    )
 
 
 def _default_filters(rows: list[dict[str, Any]]) -> list[dict[str, str]]:
-    if not rows:
-        return []
-    row = rows[0]
-    filters: list[dict[str, str]] = []
-    for path in ("meta.family", "meta.question_type", "hidden.generation_filter.reasons"):
-        if _value_at_path(row, path) is not None:
-            filters.append({"key": path, "path": path, "label": _field_label(path)})
-    return filters
+    return _present_path_specs(
+        rows,
+        ["meta.family", "meta.question_type", "hidden.generation_filter.reasons"],
+        defaults={"key": "__path__"},
+    )
 
 
 def _default_sections(rows: list[dict[str, Any]]) -> list[dict[str, str]]:
+    sections = _present_path_specs(
+        rows,
+        ["prompt", "reasoning", "target", "sources", "scores", "checks", "meta", "hidden"],
+        defaults={"format": "auto"},
+    )
+    if sections:
+        return sections
+    return [{"path": "id", "label": "Id", "format": "plain"}]
+
+
+def _present_path_specs(
+    rows: list[dict[str, Any]],
+    items: list[Any],
+    *,
+    defaults: dict[str, str],
+) -> list[dict[str, str]]:
     if not rows:
-        return [{"path": "id", "label": "Id", "format": "plain"}]
+        return []
+
     row = rows[0]
-    preferred = ["prompt", "reasoning", "target", "sources", "scores", "checks", "meta", "hidden"]
-    sections = [{"path": path, "label": _field_label(path), "format": "auto"} for path in preferred if _value_at_path(row, path) is not None]
-    if not sections:
-        sections.append({"path": "id", "label": "Id", "format": "plain"})
-    return sections
+    specs: list[dict[str, str]] = []
+    for item in items:
+        spec = _normalize_path_spec(item, defaults=defaults)
+        if spec is None:
+            continue
+        if _value_at_path(row, spec["path"]) is None:
+            continue
+        specs.append(spec)
+    return specs
 
 
 def _section_format(section_spec: dict[str, str], value: Any) -> str:
@@ -892,7 +895,7 @@ def _server_manifest(context: _ViewerContext) -> dict[str, Any]:
         "run": {
             "run_id": manifest["run_id"],
             "pack": manifest["pack"],
-            "status": manifest["status"],
+            "status": run_status(manifest),
             "run_dir": context.run.run_dir,
         },
         "summary": context.summary,

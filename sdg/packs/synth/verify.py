@@ -22,6 +22,10 @@ from sdg.packs.synth.memorization_filters import (
 )
 from sdg.packs.synth.memorization_text import normalize_text
 
+Row = dict[str, Any]
+CheckFn = Callable[[Row], bool]
+CheckSpec = tuple[str, CheckFn]
+
 
 def verify_memory_core(
     chunks: list[dict[str, Any]],
@@ -84,16 +88,7 @@ def aggregate_pack_metrics(
 
 
 def verify_memorization(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, Any], dict[str, Any]]:
-    verified = common_eval.verify(rows, _has_target, name="has_target")
-    verified = common_eval.verify(verified, _has_reasoning, name="has_reasoning")
-    verified = common_eval.verify(verified, _retrieval_grounded, name="retrieval_grounded")
-    verified = common_eval.verify(verified, _reasoning_grounded, name="reasoning_grounded")
-    verified = common_eval.verify(verified, _answer_supported, name="answer_supported")
-    verified = common_eval.verify(verified, _coverage_supported, name="coverage_supported")
-    verified = common_eval.verify(verified, _answer_not_leaked, name="answer_not_leaked")
-    verified = common_eval.verify(verified, _language_quality, name="language_quality")
-    verified = common_eval.verify(verified, _judge_pass, name="judge_pass")
-
+    verified = _apply_checks(rows, MEMORIZATION_CHECKS)
     metrics = common_eval.aggregate_metrics(verified)
     metrics["question_types"] = _question_type_counts(verified)
     failure_summary = common_eval.summarize_failures(verified)
@@ -101,18 +96,7 @@ def verify_memorization(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]
 
 
 def verify_grounded_qa(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, Any], dict[str, Any]]:
-    verified = common_eval.verify(rows, _has_target, name="has_target")
-    verified = common_eval.verify(verified, _has_reasoning, name="has_reasoning")
-    verified = common_eval.verify(verified, _grounded_qa_retrieval_grounded, name="retrieval_grounded")
-    verified = common_eval.verify(verified, _grounded_qa_reasoning_grounded, name="reasoning_grounded")
-    verified = common_eval.verify(verified, _grounded_qa_answer_supported, name="answer_supported")
-    verified = common_eval.verify(verified, _grounded_qa_coverage_supported, name="coverage_supported")
-    verified = common_eval.verify(verified, _has_citations, name="has_citations")
-    verified = common_eval.verify(verified, _grounded_qa_citation_supported, name="citation_supported")
-    verified = common_eval.verify(verified, _answer_not_leaked, name="answer_not_leaked")
-    verified = common_eval.verify(verified, _grounded_qa_language_quality, name="language_quality")
-    verified = common_eval.verify(verified, _grounded_qa_judge_pass, name="judge_pass")
-
+    verified = _apply_checks(rows, GROUNDED_QA_CHECKS)
     metrics = common_eval.aggregate_metrics(verified)
     metrics["question_types"] = _question_type_counts(verified)
     metrics["heuristics"] = {
@@ -130,38 +114,6 @@ def _has_reasoning(row: dict[str, Any]) -> bool:
     return bool(str(row.get("reasoning", "")).strip())
 
 
-def _retrieval_grounded(row: dict[str, Any]) -> bool:
-    return row_retrieval_grounded(row)
-
-
-def _reasoning_grounded(row: dict[str, Any]) -> bool:
-    return row_reasoning_grounded(row)
-
-
-def _answer_supported(row: dict[str, Any]) -> bool:
-    return row_answer_supported(row)
-
-
-def _coverage_supported(row: dict[str, Any]) -> bool:
-    return row_coverage_supported(row)
-
-
-def _grounded_qa_retrieval_grounded(row: dict[str, Any]) -> bool:
-    return row_grounded_qa_retrieval_grounded(row)
-
-
-def _grounded_qa_reasoning_grounded(row: dict[str, Any]) -> bool:
-    return row_grounded_qa_reasoning_grounded(row)
-
-
-def _grounded_qa_answer_supported(row: dict[str, Any]) -> bool:
-    return row_grounded_qa_answer_supported(row)
-
-
-def _grounded_qa_coverage_supported(row: dict[str, Any]) -> bool:
-    return row_grounded_qa_coverage_supported(row)
-
-
 def _has_citations(row: dict[str, Any]) -> bool:
     return row_has_citations(row)
 
@@ -171,8 +123,6 @@ def _grounded_qa_citation_supported(row: dict[str, Any]) -> bool:
     if not judge:
         return row_citation_supported(row)
     return bool(judge.get("citations", False))
-
-
 
 def _answer_not_leaked(row: dict[str, Any]) -> bool:
     prompt = normalize_text(row.get("prompt", ""))
@@ -187,19 +137,22 @@ def _judge_pass(row: dict[str, Any]) -> bool:
     return bool(judge.get("pass", False))
 
 
-def _language_quality(row: dict[str, Any]) -> bool:
-    return row_language_quality(row)
+CORE_CHECKS: list[CheckSpec] = [
+    ("has_target", _has_target),
+    ("has_reasoning", _has_reasoning),
+]
+
+ENDING_CHECKS: list[CheckSpec] = [
+    ("answer_not_leaked", _answer_not_leaked),
+    ("judge_pass", _judge_pass),
+]
 
 
-def _grounded_qa_judge_pass(row: dict[str, Any]) -> bool:
-    judge = row.get("scores", {}).get("judge")
-    if not judge:
-        return True
-    return bool(judge.get("pass", False))
-
-
-def _grounded_qa_language_quality(row: dict[str, Any]) -> bool:
-    return row_grounded_qa_language_quality(row)
+def _apply_checks(rows: list[Row], checks: list[CheckSpec]) -> list[Row]:
+    verified = rows
+    for name, fn in checks:
+        verified = common_eval.verify(verified, fn, name=name)
+    return verified
 
 
 def _question_type_counts(rows: list[dict[str, Any]]) -> dict[str, int]:
@@ -231,3 +184,26 @@ def _heuristic_summary(
         "failed": failed,
         "examples": examples,
     }
+
+
+MEMORIZATION_CHECKS: list[CheckSpec] = [
+    *CORE_CHECKS,
+    ("retrieval_grounded", row_retrieval_grounded),
+    ("reasoning_grounded", row_reasoning_grounded),
+    ("answer_supported", row_answer_supported),
+    ("coverage_supported", row_coverage_supported),
+    ("language_quality", row_language_quality),
+    *ENDING_CHECKS,
+]
+
+GROUNDED_QA_CHECKS: list[CheckSpec] = [
+    *CORE_CHECKS,
+    ("retrieval_grounded", row_grounded_qa_retrieval_grounded),
+    ("reasoning_grounded", row_grounded_qa_reasoning_grounded),
+    ("answer_supported", row_grounded_qa_answer_supported),
+    ("coverage_supported", row_grounded_qa_coverage_supported),
+    ("has_citations", _has_citations),
+    ("citation_supported", _grounded_qa_citation_supported),
+    ("language_quality", row_grounded_qa_language_quality),
+    *ENDING_CHECKS,
+]

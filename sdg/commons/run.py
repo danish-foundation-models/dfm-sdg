@@ -4,7 +4,7 @@ import json
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, cast
 from uuid import uuid4
 
 from sdg.commons.run_log import activate_run_log, log_event
@@ -18,6 +18,9 @@ from sdg.commons.utils import (
     write_json,
     write_yaml,
 )
+
+
+RunStatus = Literal["running", "completed", "failed"]
 
 
 @dataclass(frozen=True)
@@ -35,7 +38,7 @@ class BuildResult:
     spec_hash: str
     pack: str
     entrypoint: str
-    status: str
+    status: RunStatus
     artifacts: dict[str, Artifact]
 
 
@@ -82,7 +85,6 @@ def run(
             "spec_hash": spec_hash,
             "pack": pack,
             "entrypoint": entrypoint,
-            "status": "running",
             "created_at": iso_timestamp(),
             "started_at": iso_timestamp(),
             "finished_at": None,
@@ -101,7 +103,7 @@ def run(
         run_id = manifest["run_id"]
         outputs_dir = ensure_dir(run_dir / "outputs")
         ensure_dir(run_dir / "logs")
-        manifest["status"] = "running"
+        manifest.pop("status", None)
         manifest["finished_at"] = None
         manifest["error"] = None
         manifest["resumed_at"] = iso_timestamp()
@@ -126,7 +128,6 @@ def run(
                 seed=seed,
             )
         except Exception as error:
-            manifest["status"] = "failed"
             manifest["finished_at"] = iso_timestamp()
             manifest["error"] = {
                 "type": error.__class__.__name__,
@@ -144,7 +145,6 @@ def run(
             )
             raise
 
-        manifest["status"] = "completed"
         manifest["finished_at"] = iso_timestamp()
         manifest["output_artifacts"] = {
             name: _artifact_to_dict(artifact)
@@ -190,11 +190,15 @@ def compare(left: str, right: str) -> dict[str, Any]:
     fields = ["pack", "entrypoint", "status", "seed", "git_commit", "spec_hash"]
     manifest_diff = {
         field: {
-            "left": left_manifest.get(field),
-            "right": right_manifest.get(field),
+            "left": run_status(left_manifest) if field == "status" else left_manifest.get(field),
+            "right": run_status(right_manifest) if field == "status" else right_manifest.get(field),
         }
         for field in fields
-        if left_manifest.get(field) != right_manifest.get(field)
+        if (
+            run_status(left_manifest) if field == "status" else left_manifest.get(field)
+        ) != (
+            run_status(right_manifest) if field == "status" else right_manifest.get(field)
+        )
     }
 
     left_metrics = _read_optional_json(left_run / "outputs" / "metrics.json")
@@ -272,7 +276,7 @@ def resume(spec_hash: str, *, pack: str | None = None) -> BuildResult | None:
 
     for manifest_path in _manifest_paths(pack):
         manifest = read_json(manifest_path)
-        if manifest.get("status") != "completed":
+        if run_status(manifest) != "completed":
             continue
         if manifest.get("spec_hash") != spec_hash:
             continue
@@ -289,7 +293,7 @@ def _resume_incomplete_manifest(spec_hash: str, *, pack: str) -> tuple[Path, dic
     matches: list[tuple[str, Path, dict[str, Any]]] = []
     for manifest_path in _manifest_paths(pack):
         manifest = read_json(manifest_path)
-        if manifest.get("status") not in {"running", "failed"}:
+        if run_status(manifest) not in {"running", "failed"}:
             continue
         if manifest.get("spec_hash") != spec_hash:
             continue
@@ -351,6 +355,17 @@ def _artifact_to_dict(artifact: Artifact) -> dict[str, Any]:
     }
 
 
+def run_status(manifest: dict[str, Any]) -> RunStatus:
+    if manifest.get("error") is not None:
+        return "failed"
+    if manifest.get("finished_at") is not None:
+        return "completed"
+    legacy_status = manifest.get("status")
+    if legacy_status in {"running", "completed", "failed"}:
+        return cast(RunStatus, legacy_status)
+    return "running"
+
+
 def _result_from_manifest(run_dir: Path, manifest: dict[str, Any]) -> BuildResult:
     artifacts = {
         name: Artifact(
@@ -368,7 +383,7 @@ def _result_from_manifest(run_dir: Path, manifest: dict[str, Any]) -> BuildResul
         spec_hash=manifest["spec_hash"],
         pack=manifest["pack"],
         entrypoint=manifest["entrypoint"],
-        status=manifest["status"],
+        status=run_status(manifest),
         artifacts=artifacts,
     )
 

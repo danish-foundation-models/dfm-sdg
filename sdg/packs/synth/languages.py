@@ -13,23 +13,11 @@ LANGUAGE_NAMES: dict[LanguageCode, str] = {
 }
 
 
-class SameLanguagePlan(TypedDict):
-    kind: Literal["same_language"]
+class LanguagePlan(TypedDict):
     source: LanguageCode
     prompt: LanguageCode
     reasoning: LanguageCode
     target: LanguageCode
-
-
-class CrossLanguagePlan(TypedDict):
-    kind: Literal["cross_language"]
-    source: LanguageCode
-    prompt: LanguageCode
-    reasoning: LanguageCode
-    target: LanguageCode
-
-
-LanguagePlan = SameLanguagePlan | CrossLanguagePlan
 
 
 def language_name(code: LanguageCode) -> str:
@@ -62,7 +50,6 @@ def load_language_plan(cfg: Record, *, family: str = "memorization") -> Language
     raw_plan = family_cfg.get("language_plan")
     if raw_plan is None:
         return {
-            "kind": "same_language",
             "source": source,
             "prompt": source,
             "reasoning": source,
@@ -75,7 +62,6 @@ def load_language_plan(cfg: Record, *, family: str = "memorization") -> Language
     target = _required_language(raw_plan, "target", label=f"{family} language_plan target")
 
     return {
-        "kind": language_mode(source, prompt, reasoning, target),
         "source": source,
         "prompt": prompt,
         "reasoning": reasoning,
