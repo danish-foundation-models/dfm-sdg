@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-import json
 import time
 from collections.abc import Awaitable, Callable, Iterable, Iterator
 from pathlib import Path
-from typing import Any, TextIO, TypedDict
+from typing import Any, TypedDict
 
 from sdg.commons import Artifact, store
 from sdg.commons import publish as common_publish
@@ -305,26 +304,26 @@ async def write_family_outputs_async(
             progress=progress,
         ):
             stats["candidate_rows"] += 1
-            write_jsonl_line(candidate_handle, row)
+            store.append_jsonl_line(candidate_handle, materialize_row(row))
 
             reasons = row_filter_reasons(row)
             annotated = annotate_filter_result(row, reasons)
             tracker.on_row(reasons)
             if reasons:
                 stats["rejected_rows"] += 1
-                write_jsonl_line(rejected_handle, annotated)
+                store.append_jsonl_line(rejected_handle, materialize_row(annotated))
                 continue
 
             stats["rows"] += 1
-            write_jsonl_line(rows_handle, annotated)
+            store.append_jsonl_line(rows_handle, materialize_row(annotated))
 
     common_publish.write_preview(
-        jsonl_prefix(rows_path, limit=50),
+        store.jsonl_prefix(rows_path, limit=50),
         outputs_dir / f"{family}_preview.jsonl",
         n=50,
     )
     common_publish.write_preview(
-        jsonl_prefix(rejected_path, limit=50),
+        store.jsonl_prefix(rejected_path, limit=50),
         outputs_dir / f"{family}_rejected_preview.jsonl",
         n=50,
     )
@@ -341,32 +340,22 @@ async def write_family_outputs_async(
     return stats
 
 
-def write_jsonl_line(handle: TextIO, row: dict[str, Any]) -> None:
-    handle.write(json.dumps(materialize_row(row), sort_keys=True))
-    handle.write("\n")
-    handle.flush()
-
-
 def load_resume_state(outputs_dir: Path, *, family: str) -> ResumeState:
     candidate_ids: set[str] = set()
     stats: FamilyStats = {"rows": 0, "candidate_rows": 0, "rejected_rows": 0}
     reject_reasons: dict[str, int] = {}
 
     candidate_path = outputs_dir / f"{family}_candidates.jsonl"
-    if candidate_path.exists():
-        for row in store.read_jsonl(candidate_path):
-            candidate_ids.add(str(row["id"]))
-        stats["candidate_rows"] = len(candidate_ids)
+    candidate_ids = store.jsonl_keys(candidate_path, key_for=_candidate_row_id)
+    stats["candidate_rows"] = len(candidate_ids)
 
     rows_path = outputs_dir / f"{family}_rows.jsonl"
-    if rows_path.exists():
-        stats["rows"] = len(store.read_jsonl(rows_path))
+    stats["rows"] = store.jsonl_count(rows_path)
 
     rejected_path = outputs_dir / f"{family}_rejected.jsonl"
     if rejected_path.exists():
-        rejected_rows = store.read_jsonl(rejected_path)
-        stats["rejected_rows"] = len(rejected_rows)
-        for row in rejected_rows:
+        stats["rejected_rows"] = store.jsonl_count(rejected_path)
+        for row in store.iter_jsonl(rejected_path):
             reasons = row.get("hidden", {}).get("generation_filter", {}).get("reasons", [])
             for reason in reasons:
                 key = str(reason)
@@ -400,17 +389,8 @@ def pending_query_plans(
         yield item
 
 
-def jsonl_prefix(path: Path, *, limit: int) -> list[dict[str, Any]]:
-    if not path.exists():
-        return []
-
-    rows: list[dict[str, Any]] = []
-    with path.open() as handle:
-        for line in handle:
-            line = line.strip()
-            if not line:
-                continue
-            rows.append(json.loads(line))
-            if len(rows) >= limit:
-                return rows
-    return rows
+def _candidate_row_id(row: dict[str, Any]) -> str | None:
+    row_id = row.get("id")
+    if row_id is None:
+        return None
+    return str(row_id)

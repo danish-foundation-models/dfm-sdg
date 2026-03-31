@@ -1,0 +1,7 @@
+name: backtranslation
+description: Build instruction backtranslation data from article corpora.
+entrypoints:
+  build: sdg.packs.backtranslation.build:build
+  verify: sdg.packs.backtranslation.build:verify
+  summarize: sdg.packs.backtranslation.build:summarize
+  publish: sdg.packs.backtranslation.build:publish

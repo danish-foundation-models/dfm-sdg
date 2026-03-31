@@ -1,0 +1,16 @@
+pack: backtranslation
+reuse_completed: false
+models:
+  instruction_writer:
+    endpoint: openai
+    max_concurrency: 50
+source:
+  dataset: oliverkinch/danish_wikipedia
+  split: train
+  text_field: text
+  title_field: title
+  url_field: url
+generation:
+  min_article_chars: 400
+  temperature: 0.2
+  train_fraction: 0.9
