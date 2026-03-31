@@ -4,29 +4,15 @@
 
 It keeps the shared layer thin and puts method-specific logic in packs.
 
-## What is here
+## Repo shape
 
-- `sdg.commons.*` handles runs, artifacts, model endpoints, verification helpers, publishing helpers, and pack discovery.
-- `sdg.packs.demo` is a tiny arithmetic pack that exercises the full build and verify flow.
-- `sdg.packs.backtranslation` builds prompt-target pairs by backtranslating finished articles into writing instructions.
-- `sdg.packs.synth` is the main research pack. It currently supports memory-core building from Wikipedia-style sources, memorization generation, grounded QA generation, verification, publication, and run viewing.
-- `sdg` is the CLI entrypoint.
-
-## Current CLI
-
-The CLI currently exposes:
-
-- `build`
-- `verify`
-- `summarize`
-- `publish`
-- `upload-hf`
-- `compare`
-- `events`
-- `progress`
-- `view`
-- `serve`
-- `list-packs`
+- `sdg/commons/`: shared runtime code for runs, artifacts, model clients, publishing, viewer support, and pack discovery
+- `sdg/packs/demo/`: tiny reference pack showing the full flow end to end
+- `sdg/packs/backtranslation/`: backtranslation-style data generation from finished texts
+- `sdg/packs/synth/`: the main synthesis pack for memory-core building, memorization, grounded QA, and related workflows
+- `tests/`: pack tests and shared runtime tests
+- `artifacts/runs/<pack>/<run-id>/`: local run outputs, logs, progress snapshots, and generated datasets
+- `reports/<pack>/<run-id>/`: published outputs such as parquet exports and reports
 
 ## Quick start
 
@@ -38,11 +24,51 @@ uv run sdg list-packs
 uv run sdg build sdg/packs/demo/configs/base.yaml
 uv run sdg build sdg/packs/backtranslation/configs/base.yaml
 uv run sdg build sdg/packs/synth/configs/smoke.yaml
+```
+
+## Typical workflow
+
+Run a config:
+
+```bash
+uv run sdg build sdg/packs/backtranslation/configs/base.yaml
+```
+
+Inspect a run while it is running or after it completes:
+
+```bash
+uv run sdg progress <run-id>
 uv run sdg summarize <run-id>
-uv run sdg verify <run-id>
-uv run sdg upload-hf <run-id> --artifact dataset --repo <org/name> --private
+uv run sdg view <run-id>
 uv run sdg serve <run-id> --open
 ```
+
+Verify and publish:
+
+```bash
+uv run sdg verify <run-id>
+uv run sdg publish <run-id>
+```
+
+Upload a file artifact from a run to Hugging Face:
+
+```bash
+uv run sdg upload-hf <run-id> --artifact dataset --repo <org/name> --private
+```
+
+## Working in the repo
+
+In practice there are three common ways to add something:
+
+- add a new config when the task fits an existing pack and existing code path
+- add a new task/profile inside a pack when the runtime is shared but the source normalization or prompting changes
+- add a new pack when the workflow, artifacts, or verification logic is genuinely different
+
+As a rule:
+
+- keep pack-specific logic inside `sdg.packs.<name>`
+- keep shared runtime and generic helpers in `sdg.commons`
+- prefer small configs over branching one config for many unrelated tasks
 
 ## Adding a pack
 
@@ -75,6 +101,8 @@ Then add a test like `tests/test_demo_pack.py` that exercises build, verify, sum
 Model-backed steps load named endpoints from `.env`.
 
 Use pack configs to bind model roles to those named endpoints.
+
+If you want to upload to Hugging Face, make sure the machine is logged in with a token that has write access to the target repo or org.
 
 ## Development
 
