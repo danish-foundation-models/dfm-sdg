@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from sdg.commons import publish as common_publish
 from sdg.commons.registry import find_pack_for_path, list_packs, load_pack
 from sdg.commons.run import compare, load, progress, read_events
 from sdg.commons.utils import read_yaml
@@ -26,6 +27,16 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "publish":
         return _run_publish(args.target, args.out_dir)
+
+    if args.command == "upload-hf":
+        return _run_upload_hf(
+            args.target,
+            artifact=args.artifact,
+            repo_id=args.repo,
+            split=args.split,
+            private=args.private,
+            commit_message=args.commit_message,
+        )
 
     if args.command == "compare":
         return _run_compare(args.left, args.right)
@@ -82,6 +93,14 @@ def _build_parser() -> argparse.ArgumentParser:
     publish_parser = subparsers.add_parser("publish")
     publish_parser.add_argument("target")
     publish_parser.add_argument("--out-dir")
+
+    upload_hf_parser = subparsers.add_parser("upload-hf")
+    upload_hf_parser.add_argument("target")
+    upload_hf_parser.add_argument("--artifact", default="dataset")
+    upload_hf_parser.add_argument("--repo", required=True)
+    upload_hf_parser.add_argument("--split", default="train")
+    upload_hf_parser.add_argument("--private", action="store_true")
+    upload_hf_parser.add_argument("--commit-message")
 
     compare_parser = subparsers.add_parser("compare")
     compare_parser.add_argument("left")
@@ -157,6 +176,33 @@ def _run_publish(target: str, out_dir: str | None) -> int:
     return 0
 
 
+def _run_upload_hf(
+    target: str,
+    *,
+    artifact: str,
+    repo_id: str,
+    split: str,
+    private: bool,
+    commit_message: str | None,
+) -> int:
+    result = load(target)
+    if artifact not in result.artifacts:
+        raise ValueError(f"Run {result.run_id} has no artifact named '{artifact}'")
+
+    artifact_ref = result.artifacts[artifact]
+    payload = common_publish.upload_dataset_artifact(
+        artifact_ref,
+        repo_id=repo_id,
+        split=split,
+        private=private,
+        commit_message=commit_message,
+    )
+    payload["artifact"] = artifact
+    payload["run_id"] = result.run_id
+    payload["pack"] = result.pack
+    return _print_json_and_exit(payload)
+
+
 def _run_compare(left: str, right: str) -> int:
     _print_json(compare(left, right))
     return 0
@@ -204,3 +250,8 @@ def _run_serve(
 
 def _print_json(value: dict[str, Any]) -> None:
     print(json.dumps(value, indent=2, sort_keys=True))
+
+
+def _print_json_and_exit(value: dict[str, Any]) -> int:
+    _print_json(value)
+    return 0
