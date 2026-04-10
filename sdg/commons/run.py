@@ -19,7 +19,6 @@ from sdg.commons.utils import (
     write_yaml,
 )
 
-
 RunStatus = Literal["running", "completed", "failed"]
 
 
@@ -145,11 +144,18 @@ def run(
             )
             raise
 
-        manifest["finished_at"] = iso_timestamp()
-        manifest["output_artifacts"] = {
-            name: _artifact_to_dict(artifact)
-            for name, artifact in artifacts.items()
+        completion = {
+            "completed_at": iso_timestamp(),
+            "artifacts": {
+                name: _artifact_to_dict(artifact)
+                for name, artifact in artifacts.items()
+            },
         }
+        write_json(completion, outputs_dir / "_artifacts.json")
+
+        manifest["finished_at"] = completion["completed_at"]
+        manifest["output_artifacts"] = completion["artifacts"]
+        manifest["error"] = None
         write_json(manifest, run_dir / "manifest.json")
         log_event(
             "run",
@@ -171,11 +177,27 @@ def run(
     )
 
 
+def _repair_manifest_from_outputs(run_dir: Path, manifest: dict[str, Any]) -> dict[str, Any]:
+    if run_status(manifest) == "completed":
+        return manifest
+
+    completion_path = run_dir / "outputs" / "_artifacts.json"
+    if not completion_path.exists():
+        return manifest
+
+    completion = read_json(completion_path)
+    manifest["finished_at"] = completion.get("completed_at") or iso_timestamp()
+    manifest["output_artifacts"] = completion.get("artifacts", {})
+    manifest["error"] = None
+    write_json(manifest, run_dir / "manifest.json")
+    return manifest
+
+
 def load(run_id_or_path: str) -> BuildResult:
     """Load one completed or failed run without executing user code."""
 
     run_dir = _resolve_run_dir(run_id_or_path)
-    manifest = read_json(run_dir / "manifest.json")
+    manifest = _repair_manifest_from_outputs(run_dir, read_json(run_dir / "manifest.json"))
     return _result_from_manifest(run_dir, manifest)
 
 
@@ -275,7 +297,7 @@ def resume(spec_hash: str, *, pack: str | None = None) -> BuildResult | None:
     matches: list[tuple[str, Path]] = []
 
     for manifest_path in _manifest_paths(pack):
-        manifest = read_json(manifest_path)
+        manifest = _repair_manifest_from_outputs(manifest_path.parent, read_json(manifest_path))
         if run_status(manifest) != "completed":
             continue
         if manifest.get("spec_hash") != spec_hash:
@@ -292,7 +314,7 @@ def resume(spec_hash: str, *, pack: str | None = None) -> BuildResult | None:
 def _resume_incomplete_manifest(spec_hash: str, *, pack: str) -> tuple[Path, dict[str, Any]] | None:
     matches: list[tuple[str, Path, dict[str, Any]]] = []
     for manifest_path in _manifest_paths(pack):
-        manifest = read_json(manifest_path)
+        manifest = _repair_manifest_from_outputs(manifest_path.parent, read_json(manifest_path))
         if run_status(manifest) not in {"running", "failed"}:
             continue
         if manifest.get("spec_hash") != spec_hash:
