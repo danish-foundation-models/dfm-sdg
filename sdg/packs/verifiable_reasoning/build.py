@@ -16,7 +16,7 @@ from sdg.commons import publish as common_publish
 from sdg.commons.run import load, run
 from sdg.commons.run_log import log_event, write_snapshot
 from sdg.commons.utils import read_json, read_yaml, reports_root, write_json
-from sdg.commons.work_queue import map_async_ordered, map_async_unordered
+from sdg.commons.work_queue import map_async_ordered
 from sdg.packs.verifiable_reasoning import (
     blocked_star,
     countdownequal,
@@ -841,25 +841,28 @@ async def _stream_success_target_rows_async(
     total_target = sum(targets.values())
     variants = list(plan["variants"])
     next_variant_index = 0
+    in_flight: Counter[tuple[str, str]] = Counter()
 
     with dataset_path.open("a") as dataset_handle, rejections_path.open("a") as rejections_handle:
-        while not _success_targets_met(accepted, targets):
-            batch, next_variant_index = _next_success_target_batch(
+        pending: dict[asyncio.Task[tuple[tuple[str, str], dict[str, Any]]], tuple[str, str]] = {}
+
+        def queue_next() -> bool:
+            nonlocal next_variant_index
+            item, next_variant_index = _next_success_target_item(
                 variants,
                 accepted,
                 rejected,
-                batch_size=concurrency,
+                in_flight,
                 start_index=next_variant_index,
             )
-            if not batch:
-                break
+            if item is None:
+                return False
 
-            async def worker(
-                _index: int,
-                item: dict[str, Any],
-            ) -> tuple[tuple[str, str], dict[str, Any]]:
-                family = str(item["family"])
-                language = str(item["language"])
+            family = str(item["family"])
+            language = str(item["language"])
+            variant_key = (family, language)
+
+            async def worker() -> tuple[tuple[str, str], dict[str, Any]]:
                 row = _generate_row_from_plan(int(item["candidate_index"]), item, seed)
                 attached = await _attach_target_async(
                     row,
@@ -868,30 +871,52 @@ async def _stream_success_target_rows_async(
                     max_attempts=max_attempts,
                     max_tokens=max_tokens,
                 )
-                return (family, language), attached
+                return variant_key, attached
 
-            async for variant_key, attached in map_async_unordered(
-                batch,
-                worker,
-                concurrency=min(concurrency, len(batch)),
-                total=len(batch),
-            ):
-                if _target_row_accepted(attached) and accepted[variant_key] < targets[variant_key]:
-                    store.append_jsonl_line(dataset_handle, attached)
-                    accepted[variant_key] += 1
-                else:
-                    store.append_jsonl_line(rejections_handle, attached)
-                    rejected[variant_key] += 1
+            task = asyncio.create_task(worker())
+            pending[task] = variant_key
+            in_flight[variant_key] += 1
+            return True
 
-                write_snapshot(
-                    "verifiable_reasoning_answer_teacher",
-                    {
-                        "stage": "attaching_targets",
-                        "completed": sum(accepted.values()),
-                        "total": total_target,
-                        "rejected": sum(rejected.values()),
-                    },
-                )
+        try:
+            while True:
+                while len(pending) < concurrency and not _success_targets_met(accepted, targets):
+                    if not queue_next():
+                        break
+
+                if not pending:
+                    break
+
+                done, _ = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+                for task in done:
+                    variant_key = pending.pop(task)
+                    in_flight[variant_key] -= 1
+                    if in_flight[variant_key] == 0:
+                        del in_flight[variant_key]
+
+                    result_variant_key, attached = await task
+                    assert result_variant_key == variant_key, "worker returned mismatched variant key"
+
+                    if _target_row_accepted(attached) and accepted[variant_key] < targets[variant_key]:
+                        store.append_jsonl_line(dataset_handle, attached)
+                        accepted[variant_key] += 1
+                    else:
+                        store.append_jsonl_line(rejections_handle, attached)
+                        rejected[variant_key] += 1
+
+                    write_snapshot(
+                        "verifiable_reasoning_answer_teacher",
+                        {
+                            "stage": "attaching_targets",
+                            "completed": sum(accepted.values()),
+                            "total": total_target,
+                            "rejected": sum(rejected.values()),
+                        },
+                    )
+        finally:
+            for task in pending:
+                task.cancel()
+            await asyncio.gather(*pending, return_exceptions=True)
 
 
 def _apply_surface_plans(planned_rows: list[dict[str, Any]], rng: Random) -> None:
@@ -926,12 +951,20 @@ def _verify_problem_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _load_rows(result: BuildResult) -> list[dict[str, Any]]:
-    dataset_path = Path(result.artifacts["dataset"].path)
+    dataset_artifact = result.artifacts.get("dataset")
+    if dataset_artifact is not None:
+        dataset_path = Path(dataset_artifact.path)
+    else:
+        dataset_path = Path(result.run_dir) / "outputs" / "dataset.jsonl"
     return store.read_jsonl(dataset_path)
 
 
 def _load_plan(result: BuildResult) -> dict[str, Any]:
-    plan_path = Path(result.artifacts["plan"].path)
+    plan_artifact = result.artifacts.get("plan")
+    if plan_artifact is not None:
+        plan_path = Path(plan_artifact.path)
+    else:
+        plan_path = Path(result.run_dir) / "outputs" / "plan.json"
     return read_json(plan_path)
 
 
@@ -1117,36 +1150,35 @@ def _success_targets_met(
     return True
 
 
-def _next_success_target_batch(
+def _next_success_target_item(
     variants: list[dict[str, Any]],
     accepted: Counter[tuple[str, str]],
     rejected: Counter[tuple[str, str]],
+    in_flight: Counter[tuple[str, str]],
     *,
-    batch_size: int,
     start_index: int,
-) -> tuple[list[dict[str, Any]], int]:
-    if not variants or batch_size <= 0:
-        return [], start_index
+) -> tuple[dict[str, Any] | None, int]:
+    if not variants:
+        return None, start_index
 
-    batch: list[dict[str, Any]] = []
     variant_count = len(variants)
     cursor = start_index
     visited = 0
 
-    while len(batch) < batch_size and visited < variant_count:
+    while visited < variant_count:
         variant = variants[cursor]
         key = (str(variant["family"]), str(variant["language"]))
         target_rows = int(variant["target_rows"])
-        attempts_used = accepted[key] + rejected[key]
+        attempts_used = accepted[key] + rejected[key] + in_flight[key]
         candidate_rows = list(variant["candidate_rows"])
 
-        if accepted[key] < target_rows and attempts_used < len(candidate_rows):
-            batch.append(candidate_rows[attempts_used])
+        if accepted[key] + in_flight[key] < target_rows and attempts_used < len(candidate_rows):
+            return candidate_rows[attempts_used], (cursor + 1) % variant_count
 
         cursor = (cursor + 1) % variant_count
         visited += 1
 
-    return batch, cursor
+    return None, cursor
 
 
 def _target_row_accepted(row: dict[str, Any]) -> bool:

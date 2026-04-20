@@ -376,8 +376,58 @@ def _generate_puzzle(
 
     number_sets = list(combinations(range(number_min, number_max + 1), number_count))
     rng.shuffle(number_sets)
+    preferred_attempts = min(len(number_sets), int(recipe["sample_attempts"]))
 
-    for numbers in number_sets[: int(recipe["sample_attempts"])]:
+    puzzle = _select_puzzle_from_number_sets(
+        number_sets[:preferred_attempts],
+        rng,
+        language=language,
+        recipe=recipe,
+        surface_plan=surface_plan,
+        target_min=target_min,
+        target_max=target_max,
+        min_ops=min_ops,
+        max_ops=max_ops,
+        allowed_ops=allowed_ops,
+        use_all_numbers=use_all_numbers,
+    )
+    if puzzle is not None:
+        return puzzle
+
+    puzzle = _select_puzzle_from_number_sets(
+        number_sets[preferred_attempts:],
+        rng,
+        language=language,
+        recipe=recipe,
+        surface_plan=surface_plan,
+        target_min=target_min,
+        target_max=target_max,
+        min_ops=min_ops,
+        max_ops=max_ops,
+        allowed_ops=allowed_ops,
+        use_all_numbers=use_all_numbers,
+    )
+    if puzzle is not None:
+        return puzzle
+
+    raise AssertionError("failed to generate countdownequal puzzle")
+
+
+def _select_puzzle_from_number_sets(
+    number_sets: list[tuple[int, ...]],
+    rng: Random,
+    *,
+    language: str,
+    recipe: dict[str, Any],
+    surface_plan: dict[str, object],
+    target_min: int,
+    target_max: int,
+    min_ops: int,
+    max_ops: int,
+    allowed_ops: tuple[str, ...],
+    use_all_numbers: bool,
+) -> CountDownPuzzle | None:
+    for numbers in number_sets:
         ordered_numbers = tuple(rng.sample(numbers, len(numbers)))
         summaries = _target_summaries(ordered_numbers, allowed_ops, require_all_numbers=use_all_numbers)
         candidates = [
@@ -408,7 +458,7 @@ def _generate_puzzle(
             prompt=prompt,
         )
 
-    raise AssertionError("failed to generate countdownequal puzzle")
+    return None
 
 
 def _target_summaries(

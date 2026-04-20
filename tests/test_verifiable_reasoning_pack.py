@@ -1,12 +1,13 @@
 import importlib
 import json
+from collections import Counter
 from pathlib import Path
 from random import Random
 
 import pytest
 
 from sdg.commons import store
-from sdg.commons.run import load
+from sdg.commons.run import BuildResult, load
 from sdg.commons.utils import read_yaml
 from sdg.packs.verifiable_reasoning import (
     countdownequal,
@@ -185,6 +186,74 @@ def test_verifiable_reasoning_dataset_streaming_can_resume_from_partial_jsonl(tm
     assert [row["id"] for row in rows] == [f"verifiable-reasoning-{index:05d}" for index in range(4)]
 
 
+def test_verifiable_reasoning_loaders_fall_back_to_live_output_paths(tmp_path) -> None:
+    outputs_dir = tmp_path / "outputs"
+    outputs_dir.mkdir(parents=True, exist_ok=True)
+
+    rows = [
+        zebra.generate_row(
+            0,
+            Random(7),
+            language="en",
+            recipe=dict(zebra.recipe_catalog("en")[0]),
+        )
+    ]
+    plan = {
+        "mode": "fixed_rows",
+        "rows": [{"family": "zebra_logic", "language": "en"}],
+        "family_counts": {"zebra_logic": 1},
+        "language_counts": {"en": 1},
+    }
+    store.write_jsonl(rows, outputs_dir / "dataset.jsonl")
+    store.write_blob(plan, outputs_dir / "plan.json")
+
+    result = BuildResult(
+        run_id="run-live",
+        run_dir=str(tmp_path),
+        spec_hash="spec-hash",
+        pack="verifiable_reasoning",
+        entrypoint="build",
+        status="running",
+        artifacts={},
+    )
+
+    assert verifiable_reasoning_build_module._load_rows(result) == rows
+    assert verifiable_reasoning_build_module._load_plan(result) == plan
+
+
+def test_verifiable_reasoning_success_target_picker_respects_in_flight_slots() -> None:
+    variants = [
+        {
+            "family": "lineup_logic",
+            "language": "da",
+            "target_rows": 1,
+            "candidate_rows": [
+                {"candidate_index": 0},
+                {"candidate_index": 1},
+            ],
+        },
+        {
+            "family": "zebra_logic",
+            "language": "da",
+            "target_rows": 1,
+            "candidate_rows": [
+                {"candidate_index": 2},
+            ],
+        },
+    ]
+
+    item, cursor = verifiable_reasoning_build_module._next_success_target_item(
+        variants,
+        Counter(),
+        Counter(),
+        Counter({("lineup_logic", "da"): 1}),
+        start_index=0,
+    )
+
+    assert item == {"candidate_index": 2}
+    assert cursor == 0
+
+
 def test_verifiable_reasoning_can_verify_attached_responses() -> None:
     zebra_row = zebra.generate_row(
         0,
@@ -302,6 +371,40 @@ def test_countdownequal_can_verify_attached_response() -> None:
     assert verification["response_checks_applied"] is True
     assert verification["metrics"]["checks"]["response_parseable"]["failed"] == 0
     assert verification["metrics"]["checks"]["response_correct"]["failed"] == 0
+
+
+def test_countdownequal_hard_recipe_falls_back_past_sample_budget() -> None:
+    planned = {
+        "attempt_index": 59,
+        "candidate_index": 859,
+        "difficulty": "hard",
+        "family": "countdownequal_logic",
+        "language": "da",
+        "max_ops": 5,
+        "min_ops": 5,
+        "number_count": 6,
+        "number_max": 25,
+        "number_min": 1,
+        "operator_profile": "full",
+        "prompt_style": "formal",
+        "recipe_id": "hard_formal_6_full_all",
+        "sample_attempts": 340,
+        "surface_answer": "complete",
+        "surface_clue": "deductive",
+        "surface_instruction": "solve",
+        "surface_intro": "context",
+        "surface_response_envelope": "xml",
+        "target_max": 250,
+        "target_min": 40,
+        "use_all_numbers": True,
+    }
+
+    row = verifiable_reasoning_build_module._generate_row_from_plan(859, planned, 41)
+
+    assert row["meta"]["family"] == "countdownequal_logic"
+    assert row["meta"]["prompt_language"] == "da"
+    assert row["hidden"]["minimal_ops"] == 5
+    assert row["hidden"]["use_all_numbers"] is True
 
 
 def test_jugpuzzle_can_verify_attached_response() -> None:
