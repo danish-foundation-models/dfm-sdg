@@ -1,5 +1,5 @@
 name: python_algorithms
-description: Starter scaffold for Python algorithm tasks with executable tests.
+description: Starter scaffold for Dolci-style Python coding tasks with executable verification.
 entrypoints:
   build: sdg.packs.python_algorithms.build:build
   verify: sdg.packs.python_algorithms.build:verify
