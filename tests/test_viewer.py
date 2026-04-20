@@ -6,11 +6,15 @@ from sdg.commons import store
 from sdg.commons.run import Artifact
 from sdg.commons.viewer import (
     _build_jsonl_offsets,
+    _compact_summary,
     _default_artifact_name,
     _discover_live_artifacts,
     _resolve_artifact_view,
     _slice_jsonl_rows_with_offsets,
     _viewer_item,
+)
+from sdg.packs.verifiable_reasoning.viewer import (
+    viewer_spec as verifiable_reasoning_viewer_spec,
 )
 
 
@@ -73,3 +77,37 @@ def test_default_artifact_name_prefers_pack_viewer_order() -> None:
     }
 
     assert _default_artifact_name(spec, artifacts) == "memory_chunks"
+
+
+def test_compact_summary_handles_non_string_dict_keys() -> None:
+    summary = {
+        "family_counts": {
+            4: 12,
+            "kept_preview": ["omit me"],
+        }
+    }
+
+    assert _compact_summary(summary) == {"family_counts": {4: 12}}
+
+
+def test_verifiable_reasoning_viewer_uses_short_titles_and_response_first() -> None:
+    row = {
+        "id": "verifiable-reasoning-00001",
+        "prompt": "A very long prompt that should not become the card title.",
+        "target": "Svar:\n1, 2, 3",
+        "reasoning": "Short reasoning.",
+        "meta": {
+            "family": "zebra_logic",
+            "prompt_language": "da",
+            "difficulty": "medium",
+            "target_source": "answer_teacher",
+        },
+    }
+
+    view = _resolve_artifact_view([row], verifiable_reasoning_viewer_spec()["artifacts"]["dataset"])
+    item = _viewer_item(row, view)
+
+    assert item["title"] == "verifiable-reasoning-00001"
+    assert item["subtitle"] == "zebra_logic"
+    assert item["excerpt"] == "Svar: 1, 2, 3"
+    assert item["sections"][0]["label"] == "Response"

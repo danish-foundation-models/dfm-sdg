@@ -5,3 +5,4 @@ entrypoints:
   verify: sdg.packs.verifiable_reasoning.build:verify
   summarize: sdg.packs.verifiable_reasoning.build:summarize
   publish: sdg.packs.verifiable_reasoning.build:publish
+  viewer: sdg.packs.verifiable_reasoning.viewer:viewer_spec

@@ -16,7 +16,8 @@ import pyarrow.parquet as pq
 from markdown import markdown
 
 from sdg.commons.registry import load_pack
-from sdg.commons.run import Artifact, load, progress as load_progress, run_status
+from sdg.commons.run import Artifact, load, run_status
+from sdg.commons.run import progress as load_progress
 
 
 @dataclass
@@ -453,8 +454,7 @@ def _iter_artifact_rows(path: Path, kind: str):
     if kind == "parquet":
         parquet = pq.ParquetFile(path)
         for batch in parquet.iter_batches(batch_size=512):
-            for row in pa.Table.from_batches([batch]).to_pylist():
-                yield row
+            yield from pa.Table.from_batches([batch]).to_pylist()
         return
 
     raise AssertionError(f"unsupported viewer artifact kind: {kind}")
@@ -858,7 +858,9 @@ def _compact_summary(value: Any) -> Any:
     if isinstance(value, dict):
         compact: dict[str, Any] = {}
         for key, item in value.items():
-            if key.endswith("_preview") or key in {"kept_preview", "rejected_preview"}:
+            if isinstance(key, str) and (
+                key.endswith("_preview") or key in {"kept_preview", "rejected_preview"}
+            ):
                 continue
             compact[key] = _compact_summary(item)
         return compact
@@ -1067,10 +1069,10 @@ def _server_viewer_html(payload: dict[str, Any]) -> str:
     }}
     .app {{
       display: grid;
-      grid-template-columns: 21rem minmax(0, 1fr);
-      gap: 0.85rem;
+      grid-template-columns: 18.5rem minmax(0, 1fr);
+      gap: 0.7rem;
       min-height: 100vh;
-      padding: 0.85rem;
+      padding: 0.7rem;
     }}
     .panel {{
       background: var(--panel);
@@ -1086,13 +1088,13 @@ def _server_viewer_html(payload: dict[str, Any]) -> str:
       min-height: 0;
     }}
     .head {{
-      padding: 0.85rem 0.95rem;
+      padding: 0.7rem 0.8rem;
       border-bottom: 1px solid var(--line);
       background: linear-gradient(180deg, rgba(255,255,255,0.95), rgba(248,250,255,0.92));
     }}
     .title {{
       margin: 0;
-      font-size: 1.15rem;
+      font-size: 1.05rem;
       font-weight: 700;
       letter-spacing: -0.01em;
     }}
@@ -1108,15 +1110,15 @@ def _server_viewer_html(payload: dict[str, Any]) -> str:
     }}
     .toolbar {{
       display: grid;
-      gap: 0.7rem;
-      padding: 0.85rem 0.95rem;
+      gap: 0.55rem;
+      padding: 0.7rem 0.8rem;
       border-bottom: 1px solid var(--line);
       background: #fbfcff;
     }}
     .field-grid {{
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 0.7rem;
+      gap: 0.55rem;
     }}
     label {{
       display: grid;
@@ -1125,7 +1127,7 @@ def _server_viewer_html(payload: dict[str, Any]) -> str:
     }}
     .label {{
       color: var(--muted);
-      font-size: 0.78rem;
+      font-size: 0.72rem;
       text-transform: uppercase;
       letter-spacing: 0.05em;
     }}
@@ -1136,7 +1138,7 @@ def _server_viewer_html(payload: dict[str, Any]) -> str:
       width: 100%;
       border: 1px solid var(--line);
       border-radius: 10px;
-      padding: 0.58rem 0.68rem;
+      padding: 0.5rem 0.58rem;
       background: white;
       color: var(--text);
       min-width: 0;
@@ -1144,42 +1146,42 @@ def _server_viewer_html(payload: dict[str, Any]) -> str:
     .filters {{
       display: flex;
       flex-wrap: wrap;
-      gap: 0.5rem;
+      gap: 0.4rem;
     }}
     .filters label {{
-      min-width: 9rem;
-      flex: 1 1 10rem;
+      min-width: 8rem;
+      flex: 1 1 8.5rem;
     }}
     .row-meta {{
       display: flex;
       justify-content: space-between;
       align-items: center;
-      gap: 0.75rem;
-      padding: 0.65rem 0.95rem;
+      gap: 0.6rem;
+      padding: 0.5rem 0.8rem;
       border-bottom: 1px solid var(--line);
       background: #fbfcff;
     }}
     .list {{
       overflow: auto;
-      padding: 0.55rem;
+      padding: 0.4rem;
       display: grid;
-      gap: 0.45rem;
+      gap: 0.35rem;
       min-height: 0;
     }}
     .row-card {{
       border: 1px solid var(--line);
       border-radius: 14px;
-      padding: 0.68rem 0.75rem;
+      padding: 0.52rem 0.58rem;
       background: #fff;
       cursor: pointer;
       display: grid;
-      gap: 0.35rem;
+      gap: 0.22rem;
     }}
     .row-top {{
       display: flex;
       justify-content: space-between;
       align-items: baseline;
-      gap: 0.6rem;
+      gap: 0.45rem;
     }}
     .row-card:hover {{ border-color: var(--line-strong); }}
     .row-card.active {{
@@ -1187,25 +1189,25 @@ def _server_viewer_html(payload: dict[str, Any]) -> str:
       box-shadow: inset 0 0 0 1px var(--accent);
       background: var(--accent-soft);
     }}
-    .row-title {{ font-size: 0.91rem; font-weight: 600; line-height: 1.38; }}
-    .row-subtitle {{ color: var(--muted); font-size: 0.77rem; line-height: 1.25; flex: 0 0 auto; }}
+    .row-title {{ font-size: 0.82rem; font-weight: 600; line-height: 1.3; }}
+    .row-subtitle {{ color: var(--muted); font-size: 0.72rem; line-height: 1.2; flex: 0 0 auto; }}
     .row-excerpt {{
       color: #3d4756;
-      font-size: 0.82rem;
-      line-height: 1.4;
+      font-size: 0.76rem;
+      line-height: 1.35;
       display: -webkit-box;
-      -webkit-line-clamp: 3;
+      -webkit-line-clamp: 2;
       -webkit-box-orient: vertical;
       overflow: hidden;
     }}
-    .badges {{ display: flex; flex-wrap: wrap; gap: 0.4rem; }}
+    .badges {{ display: flex; flex-wrap: wrap; gap: 0.3rem; }}
     .badge {{
       border: 0;
       border-radius: 999px;
-      padding: 0.16rem 0.46rem;
+      padding: 0.13rem 0.38rem;
       color: #334155;
       background: var(--chip);
-      font-size: 0.69rem;
+      font-size: 0.64rem;
       cursor: pointer;
     }}
     .badge[data-tone="blue"] {{ background: var(--chip-blue); }}
@@ -1218,14 +1220,14 @@ def _server_viewer_html(payload: dict[str, Any]) -> str:
       min-width: 0;
     }}
     .detail-head {{
-      padding: 0.85rem 0.95rem;
+      padding: 0.7rem 0.8rem;
       border-bottom: 1px solid var(--line);
       display: grid;
-      gap: 0.5rem;
+      gap: 0.35rem;
       background: linear-gradient(180deg, rgba(255,255,255,0.97), rgba(248,250,255,0.92));
     }}
-    .detail-title {{ font-size: 1.02rem; font-weight: 700; line-height: 1.3; }}
-    .detail-subtitle {{ color: var(--muted); font-size: 0.84rem; }}
+    .detail-title {{ font-size: 0.94rem; font-weight: 700; line-height: 1.24; }}
+    .detail-subtitle {{ color: var(--muted); font-size: 0.78rem; }}
     .detail-actions {{
       display: flex;
       justify-content: space-between;
@@ -1236,27 +1238,27 @@ def _server_viewer_html(payload: dict[str, Any]) -> str:
     .summary-strip {{
       display: flex;
       flex-wrap: wrap;
-      gap: 0.45rem;
-      padding: 0.7rem 0.95rem 0;
+      gap: 0.35rem;
+      padding: 0.55rem 0.8rem 0;
     }}
     .summary-card {{
       min-width: 0;
       border: 1px solid var(--line);
       border-radius: 999px;
-      padding: 0.34rem 0.6rem;
+      padding: 0.26rem 0.48rem;
       background: #fbfcff;
     }}
     .summary-label {{
       color: var(--muted);
-      font-size: 0.68rem;
+      font-size: 0.62rem;
       text-transform: uppercase;
       letter-spacing: 0.05em;
     }}
-    .summary-value {{ margin-top: 0.08rem; font-size: 0.8rem; font-weight: 600; }}
+    .summary-value {{ margin-top: 0.05rem; font-size: 0.74rem; font-weight: 600; }}
     .detail-body {{
-      padding: 0.8rem 0.95rem 0.95rem;
+      padding: 0.65rem 0.8rem 0.8rem;
       display: grid;
-      gap: 0.7rem;
+      gap: 0.55rem;
       overflow: auto;
     }}
     .section {{
@@ -1266,15 +1268,15 @@ def _server_viewer_html(payload: dict[str, Any]) -> str:
       background: #fff;
     }}
     .section-head {{
-      padding: 0.58rem 0.72rem;
+      padding: 0.46rem 0.58rem;
       border-bottom: 1px solid var(--line);
       display: flex;
       justify-content: space-between;
-      gap: 0.7rem;
+      gap: 0.5rem;
       align-items: center;
       background: #fbfcff;
     }}
-    .section-title {{ font-size: 0.84rem; font-weight: 700; }}
+    .section-title {{ font-size: 0.78rem; font-weight: 700; }}
     .section-actions {{
       display: flex;
       gap: 0.35rem;
@@ -1286,8 +1288,8 @@ def _server_viewer_html(payload: dict[str, Any]) -> str:
       border-radius: 10px;
       background: white;
       color: var(--text);
-      padding: 0.3rem 0.56rem;
-      font-size: 0.76rem;
+      padding: 0.24rem 0.46rem;
+      font-size: 0.7rem;
       cursor: pointer;
     }}
     .button.subtle {{
@@ -1301,26 +1303,26 @@ def _server_viewer_html(payload: dict[str, Any]) -> str:
     }}
     pre {{
       margin: 0;
-      padding: 0.75rem;
+      padding: 0.62rem;
       white-space: pre-wrap;
       word-break: break-word;
       overflow-wrap: anywhere;
       font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-      font-size: 0.84rem;
-      line-height: 1.52;
+      font-size: 0.78rem;
+      line-height: 1.42;
     }}
     .section-text {{
-      padding: 0.75rem;
+      padding: 0.62rem;
       white-space: pre-wrap;
       word-break: break-word;
       overflow-wrap: anywhere;
-      font-size: 0.92rem;
-      line-height: 1.65;
+      font-size: 0.84rem;
+      line-height: 1.55;
     }}
     .section-markdown {{
-      padding: 0.75rem;
-      font-size: 0.92rem;
-      line-height: 1.7;
+      padding: 0.62rem;
+      font-size: 0.84rem;
+      line-height: 1.55;
     }}
     .section-markdown > :first-child {{ margin-top: 0; }}
     .section-markdown > :last-child {{ margin-bottom: 0; }}
@@ -1357,7 +1359,7 @@ def _server_viewer_html(payload: dict[str, Any]) -> str:
       background: #fff;
     }}
     summary {{
-      padding: 0.65rem 0.75rem;
+      padding: 0.52rem 0.62rem;
       cursor: pointer;
       color: var(--muted);
       font-weight: 600;
@@ -2056,10 +2058,10 @@ def _viewer_html(payload: dict[str, Any]) -> str:
     }}
     .app {{
       display: grid;
-      grid-template-columns: 21rem minmax(0, 1fr);
-      gap: 0.85rem;
+      grid-template-columns: 18.5rem minmax(0, 1fr);
+      gap: 0.7rem;
       min-height: 100vh;
-      padding: 0.85rem;
+      padding: 0.7rem;
     }}
     .panel {{
       background: var(--panel);
@@ -2075,13 +2077,13 @@ def _viewer_html(payload: dict[str, Any]) -> str:
       min-height: 0;
     }}
     .head {{
-      padding: 0.85rem 0.95rem;
+      padding: 0.7rem 0.8rem;
       border-bottom: 1px solid var(--line);
       background: linear-gradient(180deg, rgba(255,255,255,0.95), rgba(248,250,255,0.92));
     }}
     .title {{
       margin: 0;
-      font-size: 1.15rem;
+      font-size: 1.05rem;
       font-weight: 700;
       letter-spacing: -0.01em;
     }}
@@ -2092,15 +2094,15 @@ def _viewer_html(payload: dict[str, Any]) -> str:
     }}
     .toolbar {{
       display: grid;
-      gap: 0.7rem;
-      padding: 0.85rem 0.95rem;
+      gap: 0.55rem;
+      padding: 0.7rem 0.8rem;
       border-bottom: 1px solid var(--line);
       background: #fbfcff;
     }}
     .field-grid {{
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 0.7rem;
+      gap: 0.55rem;
     }}
     label {{
       display: grid;
@@ -2109,7 +2111,7 @@ def _viewer_html(payload: dict[str, Any]) -> str:
     }}
     .label {{
       color: var(--muted);
-      font-size: 0.78rem;
+      font-size: 0.72rem;
       text-transform: uppercase;
       letter-spacing: 0.05em;
     }}
@@ -2120,7 +2122,7 @@ def _viewer_html(payload: dict[str, Any]) -> str:
       width: 100%;
       border: 1px solid var(--line);
       border-radius: 10px;
-      padding: 0.58rem 0.68rem;
+      padding: 0.5rem 0.58rem;
       background: white;
       color: var(--text);
       min-width: 0;
@@ -2128,42 +2130,42 @@ def _viewer_html(payload: dict[str, Any]) -> str:
     .filters {{
       display: flex;
       flex-wrap: wrap;
-      gap: 0.5rem;
+      gap: 0.4rem;
     }}
     .filters label {{
-      min-width: 9rem;
-      flex: 1 1 10rem;
+      min-width: 8rem;
+      flex: 1 1 8.5rem;
     }}
     .row-meta {{
       display: flex;
       justify-content: space-between;
       align-items: center;
-      gap: 0.75rem;
-      padding: 0.65rem 0.95rem;
+      gap: 0.6rem;
+      padding: 0.5rem 0.8rem;
       border-bottom: 1px solid var(--line);
       background: #fbfcff;
     }}
     .list {{
       overflow: auto;
-      padding: 0.55rem;
+      padding: 0.4rem;
       display: grid;
-      gap: 0.45rem;
+      gap: 0.35rem;
       min-height: 0;
     }}
     .row-card {{
       border: 1px solid var(--line);
       border-radius: 14px;
-      padding: 0.68rem 0.75rem;
+      padding: 0.52rem 0.58rem;
       background: #fff;
       cursor: pointer;
       display: grid;
-      gap: 0.35rem;
+      gap: 0.22rem;
     }}
     .row-top {{
       display: flex;
       justify-content: space-between;
       align-items: baseline;
-      gap: 0.6rem;
+      gap: 0.45rem;
     }}
     .row-card:hover {{
       border-color: var(--line-strong);
@@ -2174,37 +2176,37 @@ def _viewer_html(payload: dict[str, Any]) -> str:
       background: var(--accent-soft);
     }}
     .row-title {{
-      font-size: 0.91rem;
+      font-size: 0.82rem;
       font-weight: 600;
-      line-height: 1.38;
+      line-height: 1.3;
     }}
     .row-subtitle {{
       color: var(--muted);
-      font-size: 0.77rem;
-      line-height: 1.25;
+      font-size: 0.72rem;
+      line-height: 1.2;
       flex: 0 0 auto;
     }}
     .row-excerpt {{
       color: #3d4756;
-      font-size: 0.82rem;
-      line-height: 1.4;
+      font-size: 0.76rem;
+      line-height: 1.35;
       display: -webkit-box;
-      -webkit-line-clamp: 3;
+      -webkit-line-clamp: 2;
       -webkit-box-orient: vertical;
       overflow: hidden;
     }}
     .badges {{
       display: flex;
       flex-wrap: wrap;
-      gap: 0.4rem;
+      gap: 0.3rem;
     }}
     .badge {{
       border: 0;
       border-radius: 999px;
-      padding: 0.16rem 0.46rem;
+      padding: 0.13rem 0.38rem;
       color: #334155;
       background: var(--chip);
-      font-size: 0.69rem;
+      font-size: 0.64rem;
       cursor: pointer;
     }}
     .badge[data-tone="blue"] {{ background: var(--chip-blue); }}
@@ -2217,20 +2219,20 @@ def _viewer_html(payload: dict[str, Any]) -> str:
       min-width: 0;
     }}
     .detail-head {{
-      padding: 0.85rem 0.95rem;
+      padding: 0.7rem 0.8rem;
       border-bottom: 1px solid var(--line);
       display: grid;
-      gap: 0.5rem;
+      gap: 0.35rem;
       background: linear-gradient(180deg, rgba(255,255,255,0.97), rgba(248,250,255,0.92));
     }}
     .detail-title {{
-      font-size: 1.02rem;
+      font-size: 0.94rem;
       font-weight: 700;
-      line-height: 1.3;
+      line-height: 1.24;
     }}
     .detail-subtitle {{
       color: var(--muted);
-      font-size: 0.84rem;
+      font-size: 0.78rem;
     }}
     .detail-actions {{
       display: flex;
@@ -2242,31 +2244,31 @@ def _viewer_html(payload: dict[str, Any]) -> str:
     .summary-strip {{
       display: flex;
       flex-wrap: wrap;
-      gap: 0.45rem;
-      padding: 0.7rem 0.95rem 0;
+      gap: 0.35rem;
+      padding: 0.55rem 0.8rem 0;
     }}
     .summary-card {{
       min-width: 0;
       border: 1px solid var(--line);
       border-radius: 999px;
-      padding: 0.34rem 0.6rem;
+      padding: 0.26rem 0.48rem;
       background: #fbfcff;
     }}
     .summary-label {{
       color: var(--muted);
-      font-size: 0.68rem;
+      font-size: 0.62rem;
       text-transform: uppercase;
       letter-spacing: 0.05em;
     }}
     .summary-value {{
-      margin-top: 0.08rem;
-      font-size: 0.8rem;
+      margin-top: 0.05rem;
+      font-size: 0.74rem;
       font-weight: 600;
     }}
     .detail-body {{
-      padding: 0.8rem 0.95rem 0.95rem;
+      padding: 0.65rem 0.8rem 0.8rem;
       display: grid;
-      gap: 0.7rem;
+      gap: 0.55rem;
       overflow: auto;
     }}
     .section {{
@@ -2276,16 +2278,16 @@ def _viewer_html(payload: dict[str, Any]) -> str:
       background: #fff;
     }}
     .section-head {{
-      padding: 0.58rem 0.72rem;
+      padding: 0.46rem 0.58rem;
       border-bottom: 1px solid var(--line);
       display: flex;
       justify-content: space-between;
-      gap: 0.7rem;
+      gap: 0.5rem;
       align-items: center;
       background: #fbfcff;
     }}
     .section-title {{
-      font-size: 0.84rem;
+      font-size: 0.78rem;
       font-weight: 700;
     }}
     .section-actions {{
@@ -2299,8 +2301,8 @@ def _viewer_html(payload: dict[str, Any]) -> str:
       border-radius: 10px;
       background: white;
       color: var(--text);
-      padding: 0.3rem 0.56rem;
-      font-size: 0.76rem;
+      padding: 0.24rem 0.46rem;
+      font-size: 0.7rem;
       cursor: pointer;
     }}
     .button.subtle {{
@@ -2314,26 +2316,26 @@ def _viewer_html(payload: dict[str, Any]) -> str:
     }}
     pre {{
       margin: 0;
-      padding: 0.75rem;
+      padding: 0.62rem;
       white-space: pre-wrap;
       word-break: break-word;
       overflow-wrap: anywhere;
       font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-      font-size: 0.84rem;
-      line-height: 1.52;
+      font-size: 0.78rem;
+      line-height: 1.42;
     }}
     .section-text {{
-      padding: 0.75rem;
+      padding: 0.62rem;
       white-space: pre-wrap;
       word-break: break-word;
       overflow-wrap: anywhere;
-      font-size: 0.92rem;
-      line-height: 1.65;
+      font-size: 0.84rem;
+      line-height: 1.55;
     }}
     .section-markdown {{
-      padding: 0.75rem;
-      font-size: 0.92rem;
-      line-height: 1.7;
+      padding: 0.62rem;
+      font-size: 0.84rem;
+      line-height: 1.55;
     }}
     .section-markdown > :first-child {{ margin-top: 0; }}
     .section-markdown > :last-child {{ margin-bottom: 0; }}
@@ -2370,7 +2372,7 @@ def _viewer_html(payload: dict[str, Any]) -> str:
       background: #fff;
     }}
     summary {{
-      padding: 0.65rem 0.75rem;
+      padding: 0.52rem 0.62rem;
       cursor: pointer;
       color: var(--muted);
       font-weight: 600;
