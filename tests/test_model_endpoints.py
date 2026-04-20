@@ -447,3 +447,44 @@ def test_async_model_logging_records_cancelled_requests(tmp_path) -> None:
     event_names = [row["event"] for row in events if row["component"] == "model"]
     assert "request_started" in event_names
     assert "request_cancelled" in event_names
+
+
+def test_async_model_request_uses_hard_timeout(tmp_path) -> None:
+    class HangingAsyncTransport(httpx.AsyncBaseTransport):
+        async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+            await asyncio.sleep(10)
+            return httpx.Response(
+                200,
+                json={"choices": [{"message": {"content": '{"target":"ok"}'}}]},
+                request=request,
+            )
+
+    run_dir = tmp_path / "run"
+    run_dir.mkdir(parents=True)
+    llm = LLM(
+        model="test-model",
+        base_url="https://example.com/v1",
+        timeout_seconds=0.01,
+        async_transport=HangingAsyncTransport(),
+    )
+
+    async def run_request() -> None:
+        with activate_run_log(run_dir):
+            await llm.achat([{"role": "user", "content": "hello"}], temperature=0.0)
+
+    with pytest.raises(TimeoutError):
+        asyncio.run(run_request())
+
+    metrics = json.loads((run_dir / "outputs" / "model_metrics.json").read_text())
+    assert metrics["totals"]["requests_started"] == 1
+    assert metrics["totals"]["requests_succeeded"] == 0
+    assert metrics["totals"]["requests_failed"] == 1
+
+    events = [
+        json.loads(line)
+        for line in (run_dir / "logs" / "events.jsonl").read_text().splitlines()
+        if line.strip()
+    ]
+    failed_events = [row for row in events if row["component"] == "model" and row["event"] == "request_failed"]
+    assert failed_events
+    assert failed_events[0]["data"]["error_type"] == "TimeoutError"

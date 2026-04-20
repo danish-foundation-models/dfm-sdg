@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 from pathlib import Path
-from typing import Any, Literal, NotRequired, TypeGuard, TypedDict
+from typing import Any, Literal, NotRequired, TypedDict, TypeGuard
 
 import httpx
 from dotenv import dotenv_values, load_dotenv
@@ -834,7 +834,10 @@ async def _apost_json(
             await runtime.acquire_async()
             acquired = True
             await runtime.wait_async()
-            response = await client.post(endpoint, json=payload, headers=headers)
+            response = await asyncio.wait_for(
+                client.post(endpoint, json=payload, headers=headers),
+                timeout=runtime.timeout_seconds,
+            )
             if response.status_code == 429:
                 delay = runtime.retry_delay(response.headers, attempt=attempt)
                 runtime.extend_backoff(delay)
