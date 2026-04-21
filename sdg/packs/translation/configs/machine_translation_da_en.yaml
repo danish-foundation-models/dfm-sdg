@@ -10,6 +10,20 @@ source:
 generation:
   max_pairs: 100447
   max_pairs_per_source: 4300
+  language_id:
+    enabled: true
+    min_chars: 80
+    min_words: 4
+    sample_chars: 4000
+    allowed_detected_languages:
+      da:
+        - da
+        - "no"
+        - nb
+        - nn
+        - sv
+      en:
+        - en
   prompt_languages:
     - da
     - en

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from functools import cache
 from pathlib import Path
 from typing import Any
 from xml.sax.saxutils import escape as xml_escape
@@ -441,6 +442,7 @@ def _iter_translation_pairs(entry: dict[str, Any]):
     max_pairs = _max_pairs(generation)
     max_pairs_per_source = _max_pairs_per_source(generation)
     max_pair_chars = _max_pair_chars(generation)
+    language_id_config = _language_id_config(generation)
     kept_pairs = 0
     kept_pairs_by_source: dict[str, int] = {}
 
@@ -449,6 +451,8 @@ def _iter_translation_pairs(entry: dict[str, Any]):
         if pair is None:
             continue
         if max_pair_chars is not None and pair["pair_max_chars"] > max_pair_chars:
+            continue
+        if language_id_config and not _pair_passes_language_id(pair, language_id_config):
             continue
 
         source_label = pair["origin"]
@@ -915,6 +919,97 @@ def _long_text_variant_count(generation: dict[str, Any]) -> int | None:
     return len(_variant_specs(generation, template_styles=long_text_template_styles))
 
 
+def _language_id_config(generation: dict[str, Any]) -> dict[str, Any] | None:
+    raw = generation.get("language_id")
+    if not raw:
+        return None
+
+    assert isinstance(raw, dict), "generation.language_id must be a mapping"
+    enabled = bool(raw.get("enabled", True))
+    if not enabled:
+        return None
+
+    min_chars = int(raw.get("min_chars", 80))
+    min_words = int(raw.get("min_words", 4))
+    sample_chars = int(raw.get("sample_chars", 4000))
+    assert min_chars >= 0, "generation.language_id.min_chars must be non-negative"
+    assert min_words >= 0, "generation.language_id.min_words must be non-negative"
+    assert sample_chars > 0, "generation.language_id.sample_chars must be positive"
+
+    allowed = raw.get("allowed_detected_languages") or {"da": ["da", "no", "nb", "nn", "sv"], "en": ["en"]}
+    assert isinstance(allowed, dict), "generation.language_id.allowed_detected_languages must be a mapping"
+
+    normalized_allowed: dict[str, tuple[str, ...]] = {}
+    for language in SUPPORTED_LANGUAGES:
+        values = allowed.get(language, [language])
+        assert isinstance(values, list), (
+            "generation.language_id.allowed_detected_languages values must be lists"
+        )
+        normalized_allowed[language] = tuple(_normalize_language_code(value) for value in values)
+
+    detector_languages = sorted({value for values in normalized_allowed.values() for value in values})
+    return {
+        "min_chars": min_chars,
+        "min_words": min_words,
+        "sample_chars": sample_chars,
+        "allowed_detected_languages": normalized_allowed,
+        "detector_languages": detector_languages,
+    }
+
+
+def _normalize_language_code(value: Any) -> str:
+    if value is False:
+        return "no"
+    return str(value)
+
+
+def _pair_passes_language_id(pair: dict[str, Any], config: dict[str, Any]) -> bool:
+    return _text_passes_language_id(str(pair["danish"]), "da", config) and _text_passes_language_id(
+        str(pair["english"]),
+        "en",
+        config,
+    )
+
+
+def _text_passes_language_id(text: str, expected_language: str, config: dict[str, Any]) -> bool:
+    sample = _language_id_sample(text, sample_chars=int(config["sample_chars"]))
+    word_count = len(sample.split())
+    if len(sample) < int(config["min_chars"]) and word_count < int(config["min_words"]):
+        return True
+
+    classifier = _language_id_classifier(tuple(config["detector_languages"]))
+    detected_language, _ = classifier.classify(sample)
+    allowed = config["allowed_detected_languages"][expected_language]
+    return detected_language in allowed
+
+
+def _language_id_sample(text: str, *, sample_chars: int) -> str:
+    letters = [match.group(0) for match in re.finditer(r"[^\W\d_]+", text, flags=re.UNICODE)]
+    if not letters:
+        return ""
+
+    normalized = " ".join(letters)
+    if len(normalized) <= sample_chars:
+        return normalized
+
+    window = max(sample_chars // 3, 1)
+    middle_start = max((len(normalized) - window) // 2, 0)
+    middle = normalized[middle_start : middle_start + window]
+    return " ".join([normalized[:window], middle, normalized[-window:]])
+
+
+@cache
+def _language_id_classifier(languages: tuple[str, ...]):
+    import langid
+
+    identifier = langid.langid.LanguageIdentifier.from_modelstring(
+        langid.langid.model,
+        norm_probs=False,
+    )
+    identifier.set_languages(list(languages))
+    return identifier
+
+
 def _source_entries(cfg: dict[str, Any]) -> list[dict[str, Any]]:
     if "sources" in cfg:
         entries = list(cfg["sources"])
@@ -974,6 +1069,7 @@ def _generation_summary(
         "max_pairs_per_source": _max_pairs_per_source(generation),
         "max_pair_chars": _max_pair_chars(generation),
         "long_text_threshold_chars": _long_text_threshold_chars(generation),
+        "language_id": _language_id_config(generation),
         "prompt_languages": _selected_prompt_languages(generation),
         "directions": _selected_directions(generation),
         "template_styles": _selected_template_styles(generation),

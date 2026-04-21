@@ -12,6 +12,7 @@ It is aimed at datasets like `oliverkinch/machine-translation-da-en` and `oliver
 - `generation.max_pairs_per_source` can cap rows per upstream source label when the corpus mixes multiple sources in one dataset
 - `generation.max_pair_chars` can skip rows that are too large to be useful as prompts
 - `generation.long_text_threshold_chars` with `generation.long_text_template_styles` can keep long rows on a simpler prompt subset
+- `generation.language_id` can drop rows whose Danish or English side does not look like the expected language
 - each source pair produces one row
 - a multi-source config emits one combined dataset artifact and applies train/eval splitting per source config
 - prompt surfaces are distributed across rows over:

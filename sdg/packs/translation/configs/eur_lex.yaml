@@ -13,6 +13,20 @@ generation:
   max_pairs: 25000
   max_pair_chars: 50000
   long_text_threshold_chars: 8000
+  language_id:
+    enabled: true
+    min_chars: 80
+    min_words: 4
+    sample_chars: 4000
+    allowed_detected_languages:
+      da:
+        - da
+        - "no"
+        - nb
+        - nn
+        - sv
+      en:
+        - en
   prompt_languages:
     - da
     - en
