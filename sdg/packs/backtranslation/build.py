@@ -13,6 +13,7 @@ from sdg.commons.run import load, run
 from sdg.commons.run_log import log_event, write_snapshot
 from sdg.commons.utils import read_json, read_yaml, reports_root, write_json
 from sdg.commons.work_queue import map_async_ordered
+from sdg.packs.backtranslation.modes import ArticleMode, EurLexSumMode, mode_for_source
 
 
 def build(cfg: dict[str, Any]) -> BuildResult:
@@ -294,13 +295,21 @@ def _record_to_article(
         or str(index)
     )
 
-    return {
+    article: dict[str, Any] = {
         "row_index": index,
         "source_id": source_id,
         "title": title,
         "text": text,
         "url": url,
     }
+
+    summary_field = source.get("summary_field")
+    if summary_field:
+        summary = _read_record_value(record, summary_field)
+        if summary:
+            article["summary"] = summary
+
+    return article
 
 
 def _read_record_value(record: dict[str, Any], field_name: str | None) -> str | None:
@@ -339,6 +348,7 @@ def _make_rows(
         _make_rows_async(
             cfg=cfg,
             writer=writer,
+            mode=mode_for_source(cfg["source"]),
             dataset_path=dataset_path,
             failures_path=failures_path,
             processed_source_ids=processed_source_ids,
@@ -353,6 +363,7 @@ async def _make_rows_async(
     *,
     cfg: dict[str, Any],
     writer: LLM,
+    mode: ArticleMode | EurLexSumMode,
     dataset_path: Path,
     failures_path: Path,
     processed_source_ids: set[str],
@@ -393,6 +404,7 @@ async def _make_rows_async(
                 writer=writer,
                 temperature=temperature,
                 source=source,
+                mode=mode,
             ),
             concurrency=worker_concurrency,
             progress=progress,
@@ -431,13 +443,16 @@ async def _generate_row(
     writer: LLM,
     temperature: float,
     source: dict[str, Any],
+    mode: ArticleMode | EurLexSumMode,
 ) -> dict[str, Any]:
-    prompt = await _generate_prompt(writer, _instruction_messages(article), temperature=temperature)
-    cleaned_prompt = _clean_generated_prompt(prompt)
+    framing = await _generate_prompt(writer, mode.framing_messages(article), temperature=temperature)
+    cleaned_framing = _clean_generated_prompt(framing)
+    prompt = mode.assemble_prompt(cleaned_framing, article)
+    target = mode.target(article)
     return {
         "id": f"backtranslation-{article['row_index']:06d}",
-        "prompt": cleaned_prompt,
-        "target": article["text"],
+        "prompt": prompt,
+        "target": target,
         "sources": [
             _drop_none(
                 {
@@ -458,7 +473,8 @@ async def _generate_row(
                 "source_path": source.get("path"),
                 "source_split": source.get("split", "train"),
                 "source_row_index": article["row_index"],
-                "target_chars": len(article["text"]),
+                "target_chars": len(target),
+                **mode.meta_extra(article),
             }
         ),
     }
@@ -470,6 +486,7 @@ async def _generate_row_result(
     writer: LLM,
     temperature: float,
     source: dict[str, Any],
+    mode: ArticleMode | EurLexSumMode,
 ) -> dict[str, dict[str, Any]]:
     try:
         row = await _generate_row(
@@ -477,6 +494,7 @@ async def _generate_row_result(
             writer=writer,
             temperature=temperature,
             source=source,
+            mode=mode,
         )
     except Exception as error:
         log_event(
@@ -672,34 +690,6 @@ def _source_id_from_failure_row(row: dict[str, Any]) -> str | None:
     if not isinstance(source_id, str):
         return None
     return source_id
-
-
-def _instruction_messages(article: dict[str, Any]) -> list[dict[str, str]]:
-    user_lines = []
-    if article["title"]:
-        user_lines.append(f"Article title: {article['title']}")
-    user_lines.append("Article text:")
-    user_lines.append(article["text"])
-
-    return [
-        {
-            "role": "system",
-            "content": (
-                "Write a short prompt that would lead an LLM to generate something like the above, "
-                "don't be too specific. "
-                "Write the prompt in the same language as the article. "
-                "If using the title helps avoid getting too specific, mention the title directly. "
-                "Example of a good response: "
-                "\"Skriv en kort, informativ artikel om \\\"<titel>\\\". "
-                "Beskriv kort baggrund, indhold eller betydning. "
-                "Hold stilen neutral, let encyklopædisk og overskuelig.\""
-            ),
-        },
-        {
-            "role": "user",
-            "content": "\n".join(user_lines),
-        },
-    ]
 
 
 def _clean_generated_prompt(value: str) -> str:
