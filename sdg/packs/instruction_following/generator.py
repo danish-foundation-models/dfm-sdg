@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from sdg.commons.model import LLM
 from sdg.packs.synth.llm_json import achat_json, chat_json
 
-from .constraints import LanguageCode, ResponseShape
+from .constraints import LanguageCode, ResponseShape, available_constraint_ids
 
 TASK_TYPES: tuple[str, ...] = (
     "analysis",
@@ -23,6 +24,31 @@ TASK_TYPES: tuple[str, ...] = (
 )
 RIGIDITY_LEVELS = {"open", "medium", "rigid"}
 NATURALNESS_LEVELS = {"low", "medium", "high"}
+PROFILE_TOKEN_RE = re.compile(r"[^\W\d_]+(?:[-'][^\W\d_]+)?", flags=re.UNICODE)
+CONSTRAINT_PROFILE_LABELS: dict[str, str] = {
+    "change_case:all_lowercase": "entire response in lowercase",
+    "count:keywords_multiple": "specific keywords must appear exact numbers of times",
+    "count:line_count": "exact number of non-empty lines",
+    "count:paragraphs": "exact number of paragraphs",
+    "count:sentences": "exact number of sentences",
+    "count:word_count_range": "word count must stay within a tight range",
+    "format:bullet_list": "bullet list with exact item count",
+    "format:json_keys": "valid JSON with exact top-level keys",
+    "format:line_indent": "each line must increase indentation by a fixed amount",
+    "format:no_digits": "no Arabic numerals",
+    "format:numbered_list": "numbered list with exact item count",
+    "format:quoted_spans": "exact number of quoted spans",
+    "format:two_responses": "exactly two non-empty sections separated by ******",
+    "format:xml_tags": "valid XML with exact root and child tags",
+    "punctuation:no_commas": "no commas",
+    "punctuation:semicolon_count": "exact number of semicolons",
+    "start_end:end_phrase": "must end with an exact phrase",
+    "start_end:first_word": "must start with an exact first word",
+    "start_end:last_word": "must end with an exact last word",
+    "words:forbidden_words": "must avoid specific words",
+    "words:ordered_keywords": "two keywords must appear in a chosen order",
+    "words:word_positions": "specific words must appear at exact word positions",
+}
 
 BLOCK_INSTRUCTION_SURFACES = {
     "en": {
@@ -368,6 +394,10 @@ def _prompt_profile_messages(
     prompt_text = str(prompt_seed["text"]).strip()
     task_types = ", ".join(f'"{task_type}"' for task_type in TASK_TYPES)
     shapes = ", ".join(f'"{shape}"' for shape in allowed_shapes)
+    constraints = "\n".join(
+        f'- "{constraint_id}": {CONSTRAINT_PROFILE_LABELS[constraint_id]}'
+        for constraint_id in available_constraint_ids()
+    )
 
     if language == "da":
         system = (
@@ -381,6 +411,8 @@ def _prompt_profile_messages(
             'Tilladte semantic_rigidity værdier: ["open", "medium", "rigid"]\n'
             'Tilladte naturalness_confidence værdier: ["low", "medium", "high"]\n'
             f"Tilladte response shapes: [{shapes}]\n\n"
+            "Tilladte constraint ids:\n"
+            f"{constraints}\n\n"
             "Returner et JSON-objekt med disse felter:\n"
             '- "task_type": én værdi fra listen\n'
             '- "semantic_rigidity": én værdi fra listen\n'
@@ -391,9 +423,11 @@ def _prompt_profile_messages(
             '- "preserve_literal_source_text": true eller false\n'
             '- "semantic_keywords": to til seks korte nøgleord eller nøglefraser fra prompten\n'
             '- "safe_response_shapes": en ikke-tom liste af response shapes, som bevarer promptens mening\n'
+            '- "safe_constraint_ids": en ikke-tom liste af constraint ids, som er semantisk sikre for prompten\n'
             '- "naturalness_confidence": én værdi fra listen\n\n'
             "Hvis prompten kræver trofast gengivelse eller tæt bevaring af kildetekst, så sæt "
-            '"preserve_literal_source_text" til true og vælg konservative svarformer.'
+            '"preserve_literal_source_text" til true og vælg konservative svarformer og konservative constraints. '
+            "Undgå især tunge layout- eller leksikalske constraints, hvis de gør prompten unaturlig eller forvrænger meningen."
         )
     else:
         system = (
@@ -407,6 +441,8 @@ def _prompt_profile_messages(
             'Allowed semantic_rigidity values: ["open", "medium", "rigid"]\n'
             'Allowed naturalness_confidence values: ["low", "medium", "high"]\n'
             f"Allowed response shapes: [{shapes}]\n\n"
+            "Allowed constraint ids:\n"
+            f"{constraints}\n\n"
             "Return a JSON object with these fields:\n"
             '- "task_type": one value from the list\n'
             '- "semantic_rigidity": one value from the list\n'
@@ -417,9 +453,11 @@ def _prompt_profile_messages(
             '- "preserve_literal_source_text": true or false\n'
             '- "semantic_keywords": two to six short keywords or key phrases from the prompt\n'
             '- "safe_response_shapes": a non-empty list of response shapes that preserve the prompt meaning\n'
+            '- "safe_constraint_ids": a non-empty list of constraint ids that are semantically safe for the prompt\n'
             '- "naturalness_confidence": one value from the list\n\n'
             'If the prompt requires faithful reproduction or close preservation of source text, set '
-            '"preserve_literal_source_text" to true and choose conservative response shapes.'
+            '"preserve_literal_source_text" to true and choose conservative response shapes and conservative constraints. '
+            "Avoid layout-heavy or lexical constraints when they would make the prompt unnatural or distort its meaning."
         )
 
     return [
@@ -512,6 +550,7 @@ def _validate_prompt_profile(
         "preserve_literal_source_text": _profile_bool(payload, prompt_seed, "preserve_literal_source_text"),
         "semantic_keywords": semantic_keywords,
         "safe_response_shapes": safe_response_shapes,
+        "safe_constraint_ids": _profile_constraint_ids(payload.get("safe_constraint_ids"), prompt_seed),
         "naturalness_confidence": naturalness_confidence,
         "profile_source": "model",
     }
@@ -544,14 +583,14 @@ def _profile_keywords(value: Any, prompt_seed: dict[str, Any]) -> list[str]:
     selected: list[str] = []
     seen: set[str] = set()
     for item in value:
-        keyword = str(item).strip()
-        if not keyword:
-            continue
-        lowered = keyword.casefold()
-        if lowered in seen:
-            continue
-        selected.append(keyword)
-        seen.add(lowered)
+        for keyword in PROFILE_TOKEN_RE.findall(str(item)):
+            lowered = keyword.casefold()
+            if lowered in seen:
+                continue
+            selected.append(keyword)
+            seen.add(lowered)
+            if len(selected) >= 6:
+                break
         if len(selected) >= 6:
             break
 
@@ -587,6 +626,31 @@ def _profile_safe_shapes(
             if isinstance(item, str) and str(item) in allowed_shape_map
         ]
     return list(allowed_shape_map.values())
+
+
+def _profile_constraint_ids(value: Any, prompt_seed: dict[str, Any]) -> list[str]:
+    allowed = set(available_constraint_ids())
+    selected: list[str] = []
+    seen: set[str] = set()
+    if isinstance(value, list):
+        for item in value:
+            constraint_id = str(item).strip()
+            if constraint_id not in allowed or constraint_id in seen:
+                continue
+            selected.append(constraint_id)
+            seen.add(constraint_id)
+
+    if selected:
+        return selected
+
+    fallback = prompt_seed.get("safe_constraint_ids")
+    if isinstance(fallback, list):
+        return [
+            str(item)
+            for item in fallback
+            if isinstance(item, str) and str(item) in allowed
+        ]
+    return list(allowed)
 
 
 def _prompt_seed_text(row_plan: dict[str, Any]) -> str:

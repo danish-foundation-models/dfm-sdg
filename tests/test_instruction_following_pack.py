@@ -58,6 +58,17 @@ class FakeScenarioWriter:
                 "preserve_literal_source_text": False,
                 "semantic_keywords": ["emnet", "note", "kort"],
                 "safe_response_shapes": ["plain_text", "json_object", "xml_object"],
+                "safe_constraint_ids": [
+                    "change_case:all_lowercase",
+                    "count:paragraphs",
+                    "count:sentences",
+                    "format:json_keys",
+                    "format:no_digits",
+                    "format:xml_tags",
+                    "punctuation:no_commas",
+                    "start_end:end_phrase",
+                    "words:forbidden_words",
+                ],
                 "naturalness_confidence": "high",
             }
             if "ét sætning" in content or "one sentence" in content:
@@ -68,6 +79,14 @@ class FakeScenarioWriter:
                         "requested_sentence_count": 1,
                         "semantic_keywords": ["vejr", "klima"],
                         "safe_response_shapes": ["plain_text"],
+                        "safe_constraint_ids": [
+                            "change_case:all_lowercase",
+                            "count:sentences",
+                            "format:no_digits",
+                            "punctuation:no_commas",
+                            "start_end:end_phrase",
+                            "words:forbidden_words",
+                        ],
                     }
                 )
             elif "5 originale idéer" in content or "5 original ideas" in content:
@@ -83,6 +102,15 @@ class FakeScenarioWriter:
                             "plain_text",
                             "separated_responses",
                         ],
+                        "safe_constraint_ids": [
+                            "change_case:all_lowercase",
+                            "format:bullet_list",
+                            "format:no_digits",
+                            "format:numbered_list",
+                            "punctuation:no_commas",
+                            "start_end:end_phrase",
+                            "words:forbidden_words",
+                        ],
                     }
                 )
             elif "solsortolie er sundt" in content:
@@ -93,6 +121,15 @@ class FakeScenarioWriter:
                         "preserve_literal_source_text": True,
                         "semantic_keywords": ["solsortolie", "sundt", "latin"],
                         "safe_response_shapes": ["plain_text"],
+                        "safe_constraint_ids": [
+                            "change_case:all_lowercase",
+                            "count:paragraphs",
+                            "count:sentences",
+                            "format:no_digits",
+                            "punctuation:no_commas",
+                            "start_end:end_phrase",
+                            "words:forbidden_words",
+                        ],
                         "naturalness_confidence": "low",
                     }
                 )
@@ -103,6 +140,16 @@ class FakeScenarioWriter:
                         "semantic_rigidity": "medium",
                         "semantic_keywords": ["elbiler", "hybridbiler", "bilkøbere"],
                         "safe_response_shapes": ["plain_text", "json_object"],
+                        "safe_constraint_ids": [
+                            "change_case:all_lowercase",
+                            "count:paragraphs",
+                            "count:sentences",
+                            "format:json_keys",
+                            "format:no_digits",
+                            "punctuation:no_commas",
+                            "start_end:end_phrase",
+                            "words:forbidden_words",
+                        ],
                     }
                 )
             elif "løbesko" in content:
@@ -112,6 +159,15 @@ class FakeScenarioWriter:
                         "semantic_rigidity": "medium",
                         "semantic_keywords": ["løbesko", "begyndere", "guide"],
                         "safe_response_shapes": ["plain_text", "bullet_list", "numbered_list"],
+                        "safe_constraint_ids": [
+                            "change_case:all_lowercase",
+                            "format:bullet_list",
+                            "format:no_digits",
+                            "format:numbered_list",
+                            "punctuation:no_commas",
+                            "start_end:end_phrase",
+                            "words:forbidden_words",
+                        ],
                     }
                 )
             elif "Oversæt denne sætning" in content:
@@ -122,6 +178,14 @@ class FakeScenarioWriter:
                         "preserve_literal_source_text": True,
                         "semantic_keywords": ["sætning", "tysk", "bog"],
                         "safe_response_shapes": ["plain_text"],
+                        "safe_constraint_ids": [
+                            "change_case:all_lowercase",
+                            "count:sentences",
+                            "format:no_digits",
+                            "punctuation:no_commas",
+                            "start_end:end_phrase",
+                            "words:forbidden_words",
+                        ],
                     }
                 )
             elif "Klassificér disse dyr" in content:
@@ -131,6 +195,15 @@ class FakeScenarioWriter:
                         "semantic_rigidity": "rigid",
                         "semantic_keywords": ["dyr", "planteædere", "rovdyr"],
                         "safe_response_shapes": ["plain_text", "json_object", "xml_object"],
+                        "safe_constraint_ids": [
+                            "change_case:all_lowercase",
+                            "format:json_keys",
+                            "format:no_digits",
+                            "format:xml_tags",
+                            "punctuation:no_commas",
+                            "start_end:end_phrase",
+                            "words:forbidden_words",
+                        ],
                     }
                 )
             elif "Forklar kort hvad fotosyntese er" in content:
@@ -140,6 +213,16 @@ class FakeScenarioWriter:
                         "semantic_rigidity": "medium",
                         "semantic_keywords": ["fotosyntese"],
                         "safe_response_shapes": ["plain_text", "json_object"],
+                        "safe_constraint_ids": [
+                            "change_case:all_lowercase",
+                            "count:paragraphs",
+                            "count:sentences",
+                            "format:json_keys",
+                            "format:no_digits",
+                            "punctuation:no_commas",
+                            "start_end:end_phrase",
+                            "words:forbidden_words",
+                        ],
                     }
                 )
             elif "Sammenlign fordele og ulemper" in content:
@@ -149,6 +232,16 @@ class FakeScenarioWriter:
                         "semantic_rigidity": "medium",
                         "semantic_keywords": ["fordele", "ulemper", "fjernarbejde", "kontorarbejde"],
                         "safe_response_shapes": ["plain_text", "json_object"],
+                        "safe_constraint_ids": [
+                            "change_case:all_lowercase",
+                            "count:paragraphs",
+                            "count:sentences",
+                            "format:json_keys",
+                            "format:no_digits",
+                            "punctuation:no_commas",
+                            "start_end:end_phrase",
+                            "words:forbidden_words",
+                        ],
                     }
                 )
             elif "Oplist fem ideer" in content:
@@ -159,6 +252,15 @@ class FakeScenarioWriter:
                         "requested_item_count": 5,
                         "semantic_keywords": ["ideer", "skolehave"],
                         "safe_response_shapes": ["bullet_list", "numbered_list", "plain_text"],
+                        "safe_constraint_ids": [
+                            "change_case:all_lowercase",
+                            "format:bullet_list",
+                            "format:no_digits",
+                            "format:numbered_list",
+                            "punctuation:no_commas",
+                            "start_end:end_phrase",
+                            "words:forbidden_words",
+                        ],
                     }
                 )
             return json.dumps(profile, ensure_ascii=False)
@@ -967,6 +1069,64 @@ def test_instruction_following_literal_source_prompt_filters_lexical_constraints
     assert "words:forbidden_words" not in seen_ids
     assert "words:ordered_keywords" not in seen_ids
     assert "words:word_positions" not in seen_ids
+
+
+def test_instruction_following_safe_constraint_ids_restrict_sampling() -> None:
+    sample_constraints = instruction_following_constraints_module.sample_constraints
+
+    prompt_seed = {
+        "semantic_rigidity": "medium",
+        "numeric_task": False,
+        "semantic_keywords": ["fotosyntese", "planter"],
+        "safe_constraint_ids": [
+            "change_case:all_lowercase",
+            "count:sentences",
+            "format:no_digits",
+            "punctuation:no_commas",
+        ],
+    }
+    seen_ids: set[str] = set()
+    for seed in range(40):
+        constraints = sample_constraints(
+            Random(seed),
+            language="da",
+            shape="plain_text",
+            min_count=2,
+            max_count=3,
+            prompt_seed=prompt_seed,
+        )
+        seen_ids.update(str(constraint["id"]) for constraint in constraints)
+
+    assert seen_ids.issubset(
+        {
+            "change_case:all_lowercase",
+            "count:sentences",
+            "format:no_digits",
+            "punctuation:no_commas",
+        }
+    )
+
+
+def test_instruction_following_safe_constraint_ids_relax_when_no_constraints_fit() -> None:
+    sample_constraints = instruction_following_constraints_module.sample_constraints
+
+    prompt_seed = {
+        "semantic_rigidity": "rigid",
+        "numeric_task": False,
+        "semantic_keywords": ["oversæt", "fransk"],
+        "safe_constraint_ids": ["format:json_keys"],
+    }
+    constraints = sample_constraints(
+        Random(3),
+        language="da",
+        shape="plain_text",
+        min_count=2,
+        max_count=3,
+        prompt_seed=prompt_seed,
+    )
+
+    assert constraints
+    assert any(constraint["id"] != "format:json_keys" for constraint in constraints)
 
 
 def test_instruction_following_uses_model_selected_prompt_keywords(tmp_path, monkeypatch) -> None:

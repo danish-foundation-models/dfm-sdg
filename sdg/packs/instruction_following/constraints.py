@@ -216,6 +216,10 @@ def available_shapes() -> tuple[ResponseShape, ...]:
     return ALL_SHAPES
 
 
+def available_constraint_ids() -> tuple[str, ...]:
+    return tuple(CONSTRAINTS)
+
+
 def topic_pool(language: LanguageCode) -> tuple[str, ...]:
     return TOPIC_POOL[language]
 
@@ -248,17 +252,15 @@ def sample_constraints(
 ) -> list[dict[str, Any]]:
     definitions = list(available_constraints(language=language, shape=shape))
     required = [definition for definition in definitions if definition.required_shape == shape]
-    extras = [
-        definition
-        for definition in definitions
-        if definition.required_shape is None
-        and _prompt_allows_constraint(definition, prompt_seed)
-    ]
-
     assert len(required) <= 1, f"expected at most one structural constraint for shape {shape}"
 
     minimum = max(min_count, len(required))
     maximum = max(max_count, minimum)
+    extras = _extra_constraints(definitions, prompt_seed)
+    if len(required) + len(extras) < minimum and isinstance(prompt_seed, dict):
+        relaxed_prompt_seed = dict(prompt_seed)
+        relaxed_prompt_seed.pop("safe_constraint_ids", None)
+        extras = _extra_constraints(definitions, relaxed_prompt_seed)
     desired = rng.randint(minimum, maximum)
 
     chosen = list(required)
@@ -281,6 +283,18 @@ def sample_constraints(
             ),
         }
         for definition in chosen
+    ]
+
+
+def _extra_constraints(
+    definitions: list[ConstraintDefinition],
+    prompt_seed: dict[str, Any] | None,
+) -> list[ConstraintDefinition]:
+    return [
+        definition
+        for definition in definitions
+        if definition.required_shape is None
+        and _prompt_allows_constraint(definition, prompt_seed)
     ]
 
 
@@ -385,10 +399,18 @@ def _prompt_allows_constraint(
     rigidity = str(prompt_seed.get("semantic_rigidity", "medium"))
     numeric_task = bool(prompt_seed.get("numeric_task"))
     preserve_literal_source_text = bool(prompt_seed.get("preserve_literal_source_text"))
+    safe_constraint_ids = {
+        str(item)
+        for item in prompt_seed.get("safe_constraint_ids", [])
+        if isinstance(item, str) and str(item)
+    }
     sentence_count = _prompt_seed_count(prompt_seed, "requested_sentence_count")
     line_count = _prompt_seed_count(prompt_seed, "requested_line_count")
     item_count = _prompt_seed_count(prompt_seed, "requested_item_count")
     keyword_count = len(_prompt_keyword_candidates(prompt_seed))
+
+    if safe_constraint_ids and constraint_id not in safe_constraint_ids:
+        return False
 
     if preserve_literal_source_text and constraint_id in {
         "count:keywords_multiple",

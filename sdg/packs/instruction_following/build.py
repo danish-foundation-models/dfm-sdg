@@ -1236,12 +1236,14 @@ def _planned_response_shape(
         return preferred_shape
 
     preferred, stress = _shape_preferences(prompt_seed)
-    if preferred_shape in preferred:
-        return preferred_shape
     if preferred_shape in stress and rng.random() < stress_probability:
         return preferred_shape
     if preferred:
-        return rng.choice(preferred)
+        return _weighted_shape_choice(
+            preferred,
+            rng=rng,
+            preferred_shape=preferred_shape if preferred_shape in preferred else None,
+        )
     return preferred_shape
 
 
@@ -1252,23 +1254,33 @@ def _shape_preferences(prompt_seed: dict[str, Any]) -> tuple[list[ResponseShape]
     sentence_count = _prompt_seed_count(prompt_seed, "requested_sentence_count")
     line_count = _prompt_seed_count(prompt_seed, "requested_line_count")
     item_count = _prompt_seed_count(prompt_seed, "requested_item_count")
-    safe_response_shapes = [
+    allowed_shapes = {
         _response_shape(shape)
         for shape in prompt_seed.get("safe_response_shapes", [])
         if isinstance(shape, str)
-    ]
+    }
 
-    if safe_response_shapes:
-        return safe_response_shapes, []
+    def filtered(
+        preferred: list[ResponseShape],
+        stress: list[ResponseShape],
+    ) -> tuple[list[ResponseShape], list[ResponseShape]]:
+        if not allowed_shapes:
+            return preferred, stress
+
+        allowed_preferred = [shape for shape in preferred if shape in allowed_shapes]
+        allowed_stress = [shape for shape in stress if shape in allowed_shapes]
+        if allowed_preferred:
+            return allowed_preferred, allowed_stress
+        return preferred, stress
 
     if sentence_count is not None:
-        return ["plain_text"], []
+        return filtered(["plain_text"], [])
 
     if line_count is not None:
         preferred: list[ResponseShape] = ["plain_text", "bullet_list", "numbered_list", "separated_responses"]
         if rigidity == "open":
             preferred.append("indented_lines")
-        return preferred, []
+        return filtered(preferred, [])
 
     if item_count is not None:
         if item_count == 2:
@@ -1276,32 +1288,84 @@ def _shape_preferences(prompt_seed: dict[str, Any]) -> tuple[list[ResponseShape]
         else:
             preferred = ["bullet_list", "numbered_list", "plain_text", "separated_responses"]
         stress = ["json_object", "xml_object"] if task_type == "classification" else []
-        return preferred, stress
+        return filtered(preferred, stress)
 
     if numeric_task:
-        return ["json_object", "xml_object", "plain_text", "separated_responses"], ["bullet_list", "numbered_list"]
+        return filtered(
+            ["json_object", "xml_object", "plain_text", "separated_responses"],
+            ["bullet_list", "numbered_list"],
+        )
 
     if task_type == "translation":
         stress = ["json_object", "xml_object"] if rigidity != "rigid" else []
-        return ["bullet_list", "numbered_list", "plain_text", "separated_responses"], stress
+        return filtered(["bullet_list", "numbered_list", "plain_text", "separated_responses"], stress)
 
     if task_type == "classification":
-        return ["json_object", "xml_object", "bullet_list", "numbered_list", "plain_text", "separated_responses"], []
+        return filtered(
+            ["json_object", "xml_object", "bullet_list", "numbered_list", "plain_text", "separated_responses"],
+            [],
+        )
 
     if task_type in {"analysis", "comparison"}:
-        return ["plain_text", "bullet_list", "numbered_list", "json_object", "xml_object", "separated_responses"], []
+        return filtered(
+            ["plain_text", "bullet_list", "numbered_list", "json_object", "xml_object", "separated_responses"],
+            [],
+        )
 
     if task_type in {"explanation", "question_answering", "rewrite", "summarization"}:
-        return ["plain_text", "json_object", "xml_object", "bullet_list", "numbered_list", "separated_responses"], []
+        return filtered(
+            ["plain_text", "json_object", "xml_object", "bullet_list", "numbered_list", "separated_responses"],
+            [],
+        )
 
     if task_type in {"listing", "recommendation"}:
-        return ["bullet_list", "numbered_list", "plain_text", "separated_responses", "json_object", "xml_object"], []
+        return filtered(
+            ["bullet_list", "numbered_list", "plain_text", "separated_responses", "json_object", "xml_object"],
+            [],
+        )
 
     preferred = list(available_shapes())
     if rigidity in {"medium", "rigid"} and "indented_lines" in preferred:
         preferred.remove("indented_lines")
-        return preferred, ["indented_lines"]
-    return preferred, []
+        return filtered(preferred, ["indented_lines"])
+    return filtered(preferred, [])
+
+
+SHAPE_BASE_WEIGHTS: dict[ResponseShape, int] = {
+    "plain_text": 8,
+    "json_object": 6,
+    "xml_object": 6,
+    "bullet_list": 4,
+    "numbered_list": 2,
+    "separated_responses": 2,
+    "indented_lines": 1,
+}
+
+
+def _weighted_shape_choice(
+    shapes: list[ResponseShape],
+    *,
+    rng: Random,
+    preferred_shape: ResponseShape | None,
+) -> ResponseShape:
+    if len(shapes) == 1:
+        return shapes[0]
+
+    weighted: list[tuple[ResponseShape, int]] = []
+    for shape in shapes:
+        weight = SHAPE_BASE_WEIGHTS.get(shape, 1)
+        if shape == preferred_shape:
+            weight *= 2
+        weighted.append((shape, weight))
+
+    total = sum(weight for _, weight in weighted)
+    draw = rng.uniform(0, total)
+    cumulative = 0.0
+    for shape, weight in weighted:
+        cumulative += weight
+        if draw <= cumulative:
+            return shape
+    return weighted[-1][0]
 
 
 def _shuffled_values(rng: Random, values: list[str]) -> list[str]:
