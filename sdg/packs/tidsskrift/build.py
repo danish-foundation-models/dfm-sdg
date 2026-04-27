@@ -72,26 +72,26 @@ _STYLE_SEEDS: list[tuple[str, str]] = [
     (
         "Stil: uformel og lidt omstændelig — brugeren sludrer lidt om hvad de sidder med, "
         "før de kommer til selve spørgsmålet.\n"
-        'Eksempel: "Hej, jeg sidder og arbejder på min bachelor og det går lidt langsomt... '
-        'jeg har brug for et afsnit der forklarer sammenhængen mellem neoliberalisme og '
+        'Eksempel: "Sidder her og arbejder på min bachelor og det går lidt langsomt... '
+        'har brug for et afsnit der forklarer sammenhængen mellem neoliberalisme og '
         'velfærdsreformer. Noget akademisk ville være perfekt, tak."',
         "Stil: uformel og lidt omstændelig — brugeren sludrer lidt om hvad de sidder med, "
         "før de kommer til selve spørgsmålet.\n"
-        'Eksempel: "Hej! Jeg er i gang med et kreativt projekt og har fundet på en karakter '
-        'der er lidt melankolsk og ensom. Kan du skrive et kort prosauddrag fra hendes '
-        'perspektiv, noget stemningsfuldt?"',
+        'Eksempel: "Arbejder på et kreativt projekt og har fundet på en karakter der er lidt '
+        'melankolsk og ensom. Kan du skrive et kort prosauddrag fra hendes perspektiv, '
+        'noget stemningsfuldt?"',
     ),
     # 4 — thinks aloud, builds up the request in stages
     (
         "Stil: brugeren tænker højt og bygger anmodningen op i etaper — "
         "starter vagt og specificerer gradvist hvad de vil have.\n"
-        'Eksempel: "Jeg tror jeg har brug for noget der handler om diskurs i en politologisk '
-        'sammenhæng. Noget analytisk, ikke for teknisk — måske to-tre afsnit der introducerer '
-        'begrebet og viser hvordan det bruges i praksis. Kan du skrive det?"',
+        'Eksempel: "Noget analytisk om diskurs i politologi... ikke for teknisk... måske '
+        'to-tre afsnit der introducerer begrebet og viser brugen i praksis. Ja, det tror '
+        'jeg passer. Kan du skrive det?"',
         "Stil: brugeren tænker højt og bygger anmodningen op i etaper — "
         "starter vagt og specificerer gradvist hvad de vil have.\n"
-        'Eksempel: "Jeg ved ikke helt hvad genre... noget poetisk tror jeg, med en '
-        'eksperimenterende form. Om tid og forgængelighed. Måske to strofer? Prøv."',
+        'Eksempel: "Noget poetisk, tror jeg... eksperimenterende form, om tid og '
+        'forgængelighed. Måske to strofer? Prøv."',
     ),
     # 5 — very short, telegraphic
     (
@@ -132,7 +132,7 @@ _STYLE_SEEDS: list[tuple[str, str]] = [
     # 9 — professional / formal register
     (
         "Stil: professionel og formel, som en kollega eller redaktør der bestiller tekst.\n"
-        'Eksempel: "Jeg har brug for et kort, velformuleret introduktionsafsnit til et '
+        'Eksempel: "Vi mangler et kort, velformuleret introduktionsafsnit til et '
         'temanummer om digitalisering i det offentlige. Akademisk register, ca. 150 ord."',
         "Stil: professionel og formel, som en kollega eller redaktør der bestiller tekst.\n"
         'Eksempel: "Vi mangler et stemningsfuldt indledningsafsnit til en antologi om '
@@ -419,8 +419,6 @@ def _record_to_article(
     source: dict[str, Any],
     index: int,
 ) -> dict[str, Any] | None:
-    import re
-
     text = common_sources.read_record_value(record, source.get("text_field", "text"))
     if not text:
         return None
@@ -434,6 +432,8 @@ def _record_to_article(
     text = re.sub(r"<!--\s*image\s*-->", "", text, flags=re.IGNORECASE)
     # Normalize repeated spaces (PDF justified-text artifact) but preserve newlines.
     text = re.sub(r" {2,}", " ", text)
+    # Fix PDF soft-hyphen word-breaks: "ideolo -gier" → "ideologier", "mar -ked" → "marked"
+    text = re.sub(r"([a-zæøåA-ZÆØÅ]) -([a-zæøåA-ZÆØÅ])", r"\1\2", text)
     text = re.sub(r"\n{3,}", "\n\n", text).strip()
 
     title = common_sources.read_record_value(record, source.get("title_field", "title"))
@@ -697,6 +697,8 @@ def _instruction_messages(article: dict[str, Any]) -> list[dict[str, str]]:
         "eller tekster der ikke er vedlagt — ingen 'disse artikler', 'ovenstående tekst', "
         "'nedenstående dokument', 'de tre artikler' eller lignende. "
         "Prompten skal beskrive hvad brugeren ønsker skrevet, ikke hvad brugeren ønsker præsenteret.",
+        "Prompten må IKKE bede om referencer til bestemte navngivne akademiske artikler, "
+        "studier eller forskere der ikke naturligt indgår i emnet.",
     ]
     if journal_description:
         system_lines.append(f"\nTidsskriftets beskrivelse: {journal_description}")
@@ -711,7 +713,8 @@ def _instruction_messages(article: dict[str, Any]) -> list[dict[str, str]]:
     user_content = (
         "\n".join(user_lines)
         + f"\n\n---\nSkriv en prompt der ville føre en AI til at skrive ovenstående tekst. "
-        f"Brug følgende stil:\n\n{task}"
+        f"Brug følgende stil som inspiration — efterlign tonen og strukturen, "
+        f"men variér åbning og ordvalg frit. Eksemplet er kun ét eksempel på stilen:\n\n{task}"
     )
 
     return [
@@ -732,6 +735,23 @@ def _clean_generated_prompt(value: str) -> str:
     # Strip surrounding quotes
     if text.startswith('"') and text.endswith('"') and len(text) >= 2:
         text = text[1:-1].strip()
+    # Reject meta-prompts: the model wrote a prompt *about* generating prompts instead
+    # of a user-facing prompt. These slip through when the passage is an editorial intro.
+    if re.search(
+        r"(formuler en prompt|skriv en prompt der|få en (AI|sprogmodel) til at (skrive|generere))",
+        text,
+        re.IGNORECASE,
+    ):
+        raise ValueError(f"meta-prompt detected: {text[:120]!r}")
+    # Reject self-referential prompts that reference non-existent attached documents.
+    # "disse artikler / disse to bidrag / disse tekster" etc. indicate the model invented
+    # a framing where multiple articles are being presented — they don't exist in the data.
+    if re.search(
+        r"\bdisse\s+(?:(?:to|tre|fire|fem|\d+)\s+)?(?:artik(?:el|ler)|bidrag|tekster?|essays?|afsnit)\b",
+        text,
+        re.IGNORECASE,
+    ):
+        raise ValueError(f"self-referential prompt detected: {text[:120]!r}")
     return text
 
 
@@ -798,9 +818,93 @@ def _score_paragraph(p: str) -> float:
     if p.startswith("#"):
         return 0.0
 
+    # Mid-sentence fragments — paragraphs starting with a lowercase letter indicate
+    # extraction hit max_chars in the middle of a sentence in the original document.
+    stripped = p.lstrip()
+    if stripped and stripped[0].islower():
+        return 0.0
+
+    # Image tags / captions left over from HTML or markdown (e.g. "<figure>", "< image >")
+    if p.lstrip().startswith("<"):
+        return 0.0
+
+    # Photo credits, figure captions ("Foto: ...", "Figur 1.", "Kilde: ...")
+    if re.match(r"^\s*(foto|figur\s*\d|kilde)\s*:", p, re.IGNORECASE):
+        return 0.0
+    # Inline photo credits inside an otherwise short figure-metadata paragraph.
+    # e.g. "Modellen på ARKEN: ..., ARKEN Museum for Moderne Kunst. Foto: Sophie Amalie..."
+    if re.search(r"\bFoto:\s+[A-ZÆØÅ]\w", p):
+        return 0.0
+
+    # Metadata label lines ("DANSK RESUMÉ: ...", "ENGLISH ABSTRACT:", "NOTER:", etc.)
+    # Match both standalone headers (whole paragraph is the label) and label-prefixed content.
+    if re.match(
+        r"^\s*(dansk\s+resum[eé]|english\s+abstract|noter|note\s+\d|appendix)\s*[:\.]",
+        p,
+        re.IGNORECASE,
+    ):
+        return 0.0
+
+    # Editorial meta-passages that reference other articles in the same journal issue.
+    # These only make sense in that specific publishing context and are poor training targets.
+    if re.search(
+        r"\b(dette\s+temanummer|det\s+følgende\s+nummer|fra\s+redaktionens\s+side|"
+        r"temanummerets\s+(?:\w+\s+)?artik(?:el|ler)|"
+        r"(?:første|anden|tredje)\s+artikel\s+i\s+(?:dette|temanummeret)|"
+        r"artiklerne\s+i\s+dette\s+nummer|"
+        r"dette\s+nummer\s+af\s+[A-ZÆØÅ]|"
+        r"temaredaktionen\b)",
+        p,
+        re.IGNORECASE,
+    ):
+        return 0.0
+    # "Temanummeret om..." at start of paragraph — editorial overview opening
+    if re.match(r"^\s*[Tt]emanummeret\b", p):
+        return 0.0
+
+    # Cross-reference to a named article within a journal issue.
+    # Catches patterns like:
+    #   "[Author]s artikel '[Title]'"        — possessive author reference
+    #   "i artiklen '[Title]'"               — in the article (singular)
+    #   "i deres artikler '[A]' og '[B]'"    — in their articles (plural, editorial)
+    #   "emnet for [Author]s artikel"        — editorial topic framing
+    #   "Artiklen '[Title]' af [Author]"     — article named by title
+    #   "[Author] har skrevet artiklen '[Title]'"  — attribution sentence
+    if re.search(
+        r"\b\w[\w\-']*s\s+artikel\s+['\u2018\u2019\u201c\u201d\"]"
+        r"|"
+        r"\bi\s+(?:sin|deres)\s+artik(?:el|ler)\s+['\u2018\u2019\u201c\u201d\"]"
+        r"|"
+        r"\bi\s+artiklen,?\s+['\u2018\u2019\u201c\u201d\"]"
+        r"|"
+        # "i artiklen [CapTitle]" — article name (unquoted) follows immediately after "artiklen"
+        r"\bi\s+artiklen\s+[A-ZÆØÅ]"
+        r"|"
+        r"\bemnet\s+for\s+\w[\w\-']*s\s+artikel\b"
+        r"|"
+        r"^\s*[Aa]rtiklen\s+['\u2018\u2019\u201c\u201d\"]"
+        r"|"
+        r"\bhar\s+skrevet\s+artiklen\s+['\u2018\u2019\u201c\u201d\"]"
+        r"|"
+        # Editorial summaries: "[Article Title] tilbyder/udforsker [Author Name, Author Name]"
+        # The pattern: verb immediately followed by a capitalised name then comma (multiple authors)
+        r"\b(?:tilbyder|udforsker|analyserer)\s+[A-ZÆØÅ]\w+(?:\s+[A-ZÆØÅ]\w+)?,\s+[A-ZÆØÅ]"
+        r"|"
+        # "[Author] præsenterer i [Article Title]" — author summarising their own co-published piece
+        r"\b[A-ZÆØÅ]\w+\s+præsenterer\s+i\s+[A-ZÆØÅ]",
+        p,
+        re.IGNORECASE,
+    ):
+        return 0.0
+
     # Low alphabetic ratio — likely a table, list of references, or garbage
     alpha_ratio = sum(c.isalpha() for c in p) / len(p)
     if alpha_ratio < 0.55:
+        return 0.0
+
+    # Markdown tables: majority of lines start with "|"
+    lines = [ln for ln in p.splitlines() if ln.strip()]
+    if lines and sum(ln.lstrip().startswith("|") for ln in lines) / len(lines) > 0.5:
         return 0.0
 
     # Metadata patterns: author lines, emails, DOIs, URLs, affiliations, abstract/keyword headers
@@ -810,20 +914,48 @@ def _score_paragraph(p: str) -> float:
         re.IGNORECASE,
     ):
         return 0.0
+    # Publication metadata blocks (journal submission/acceptance lines, publisher credits)
+    if re.search(
+        r"\baccept[e-]ret\s+til\s+publikation\b"
+        r"|\bmodtaget\s+til\s+(?:review|vurdering)\b"
+        r"|PUBLICERET\s+AF\s+DET\s+KGL\b"
+        r"|\bpubliceret\s+af\s+det\s+(?:kgl|kongelige)\b",
+        p,
+        re.IGNORECASE,
+    ):
+        return 0.0
     if re.match(r"^\s*(keywords?|abstract|english\s+abstract|resumé)\s*:", p, re.IGNORECASE):
         return 0.0
 
     # Very short lines dominate — probably a reference list or structured metadata
-    lines = [ln for ln in p.splitlines() if ln.strip()]
     if lines and sum(len(ln) < 60 for ln in lines) / len(lines) > 0.7:
         return 0.0
 
-    # Reference list patterns: lines starting with "- Author, X. (YYYY)" or "[1]"
+    # Reference list patterns:
+    #   - dash-style with parenthesised year:  "- Author, X. (YYYY)"
+    #   - dash-style numbered footnotes:       "- 1 Author…" / "- 16 Se …"
+    #   - dash-style bibliography:             "- Murray, Stuart. 2004. Title"
+    #   - bracket style:                       "[1] Author"
+    #   - period-year bibliography:            "Author, First. YYYY. Title"
+    #   - year-bracket bibliography:           "Author. 1994 [1989]. Title"  / "Author, red. 2015a."
+    #   - numbered footnotes (space):          "1 Author..." / "23 Note text..."
+    #   - numbered footnotes (period):         "28. I Jens Himmelstrups..." / "3. Se …"
+    #   - newspaper/media citation:            "Author, N.E. (19. juli 2015). 'Title'. I: Publication"
     ref_lines = sum(
         1
         for ln in lines
         if re.match(r"^\s*[-–]\s+\w.{0,40}\(\d{4}\)", ln)  # noqa: RUF001
+        or re.match(r"^\s*[-–]\s+\d{1,3}\s+\w", ln)  # noqa: RUF001
+        or re.match(r"^\s*[-–]\s+[A-ZÆØÅ]\w.{0,80}\d{4}", ln)  # noqa: RUF001
         or re.match(r"^\s*\[\d+\]", ln)
+        # Broader period-year: catches "Author. YYYY." / "Author. YYYY [YYYY2]" / "Author, red. YYYYa."
+        or re.match(r"^\s*\w[\w\s,\-\.]{5,40}\.\s+\d{4}", ln)
+        # Numbered footnotes (space-separated): "1 Author..." or "23 Note text..."
+        or re.match(r"^\s*\d{1,3}\s+[A-ZÆØÅ]\w", ln)
+        # Numbered footnotes (period-separated): "28. I Jens..." or "3. Se ..."
+        or re.match(r"^\s*\d{1,3}\.\s+[A-ZÆØÅ\w]", ln)
+        # Newspaper/media citation: "Author, Initial (day. month year)"
+        or re.match(r"^\s*[A-ZÆØÅ]\w+,\s+\w[\w\.\-]{0,10}\s*\(\d", ln)
     )
     if lines and ref_lines / len(lines) > 0.3:
         return 0.0
