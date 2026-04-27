@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 from collections import Counter
 from pathlib import Path
 from random import Random
@@ -13,7 +14,7 @@ from sdg.commons import publish as common_publish
 from sdg.commons.model import LLM
 from sdg.commons.run import load, run
 from sdg.commons.utils import read_json, read_yaml, reports_root, write_json
-from sdg.commons.work_queue import map_async_ordered
+from sdg.commons.work_queue import map_async_ordered, map_async_unordered
 from sdg.packs.instruction_following.constraints import (
     LanguageCode,
     ResponseShape,
@@ -67,6 +68,11 @@ def verify(run_id_or_path: str) -> dict[str, Any]:
     outputs_dir = Path(result.run_dir) / "outputs"
     store.write_jsonl(verification["rows"], outputs_dir / "verified.jsonl")
     store.write_jsonl(verification["failures"], outputs_dir / "failures.jsonl")
+    if plan.get("acceptance_mode"):
+        rejections_path = outputs_dir / "rejections.jsonl"
+        if rejections_path.exists():
+            rejections = store.read_jsonl(rejections_path)
+            store.write_jsonl(_verify_rows_only(rejections), outputs_dir / "rejections_verified.jsonl")
     write_json(verification["metrics"], outputs_dir / "metrics.json")
     write_json(verification["failure_summary"], outputs_dir / "failure_summary.json")
     write_json(verification["dataset_checks"], outputs_dir / "dataset_checks.json")
@@ -84,17 +90,7 @@ def verify(run_id_or_path: str) -> dict[str, Any]:
 
 
 def verify_rows(rows: list[dict[str, Any]], *, plan: dict[str, Any] | None = None) -> dict[str, Any]:
-    verified_rows = common_eval.verify(rows, _messages_well_formed, name="messages_well_formed")
-    verified_rows = common_eval.verify(verified_rows, _instruction_block_matches_hidden, name="instruction_block_matches_hidden")
-    verified_rows = common_eval.verify(verified_rows, _constraints_supported, name="constraints_supported")
-    verified_rows = common_eval.verify(verified_rows, _generation_succeeded, name="generation_succeeded")
-
-    response_checks_applied = _has_expected_responses(rows)
-    if response_checks_applied:
-        verified_rows = common_eval.verify(verified_rows, _response_present, name="response_present")
-        verified_rows = common_eval.verify(verified_rows, _response_follows_strict, name="response_follows_strict")
-        verified_rows = common_eval.verify(verified_rows, _response_follows_loose, name="response_follows_loose")
-
+    verified_rows = _verify_rows_only(rows)
     failures = [row for row in verified_rows if _row_failed(row)]
     metrics = common_eval.aggregate_metrics(verified_rows)
     failure_summary = common_eval.summarize_failures(verified_rows)
@@ -106,8 +102,23 @@ def verify_rows(rows: list[dict[str, Any]], *, plan: dict[str, Any] | None = Non
         "metrics": metrics,
         "failure_summary": failure_summary,
         "dataset_checks": dataset_checks,
-        "response_checks_applied": response_checks_applied,
+        "response_checks_applied": _has_expected_responses(rows),
     }
+
+
+def _verify_rows_only(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    verified_rows = common_eval.verify(rows, _messages_well_formed, name="messages_well_formed")
+    verified_rows = common_eval.verify(verified_rows, _instruction_block_matches_hidden, name="instruction_block_matches_hidden")
+    verified_rows = common_eval.verify(verified_rows, _constraints_supported, name="constraints_supported")
+    verified_rows = common_eval.verify(verified_rows, _generation_succeeded, name="generation_succeeded")
+
+    response_checks_applied = _has_expected_responses(rows)
+    if response_checks_applied:
+        verified_rows = common_eval.verify(verified_rows, _response_present, name="response_present")
+        verified_rows = common_eval.verify(verified_rows, _response_follows_strict, name="response_follows_strict")
+        verified_rows = common_eval.verify(verified_rows, _response_follows_loose, name="response_follows_loose")
+
+    return verified_rows
 
 
 def summarize(run_id_or_path: str) -> dict[str, Any]:
@@ -211,8 +222,12 @@ def _build_run(
     outputs_dir: Path,
     seed: int | None,
 ) -> dict[str, Artifact]:
-    plan = _create_plan(cfg, seed)
-    plan_path = write_json(plan, outputs_dir / "plan.json")
+    plan_path = outputs_dir / "plan.json"
+    if plan_path.exists():
+        plan = read_json(plan_path)
+    else:
+        plan = _create_plan(cfg, seed)
+        write_json(plan, plan_path)
     dataset_path = _write_dataset(plan, cfg, outputs_dir)
     row_count = store.jsonl_count(dataset_path)
     common_publish.write_preview(
@@ -221,7 +236,7 @@ def _build_run(
         n=20,
     )
 
-    return {
+    artifacts = {
         "dataset": Artifact(
             name="dataset",
             path=str(dataset_path),
@@ -235,6 +250,15 @@ def _build_run(
             meta={"rows": len(plan["rows"])},
         ),
     }
+    rejections_path = outputs_dir / "rejections.jsonl"
+    if rejections_path.exists():
+        artifacts["rejections"] = Artifact(
+            name="rejections",
+            path=str(rejections_path),
+            kind="jsonl",
+            meta={"rows": store.jsonl_count(rejections_path), "family": "instruction_following"},
+        )
+    return artifacts
 
 
 def _create_plan(cfg: dict[str, Any], seed: int | None) -> dict[str, Any]:
@@ -244,6 +268,8 @@ def _create_plan(cfg: dict[str, Any], seed: int | None) -> dict[str, Any]:
 async def _create_plan_async(cfg: dict[str, Any], seed: int | None) -> dict[str, Any]:
     generation = cfg["generation"]
     count = _positive_int(generation, "count", default=20)
+    acceptance_mode = _acceptance_mode(generation)
+    candidate_count = _candidate_count(generation, target_count=count) if acceptance_mode else count
     min_constraints = _positive_int(generation, "min_constraints", default=1)
     max_constraints = _positive_int(generation, "max_constraints", default=3)
     assert min_constraints <= max_constraints, "generation min_constraints must be <= max_constraints"
@@ -282,7 +308,7 @@ async def _create_plan_async(cfg: dict[str, Any], seed: int | None) -> dict[str,
     rng.shuffle(variants)
 
     draft_rows: list[dict[str, Any]] = []
-    for index in range(count):
+    for index in range(candidate_count):
         variant = variants[index % len(variants)]
         row_rng = Random(rng.randint(0, 1_000_000_000))
         language = str(variant["language"])
@@ -332,6 +358,9 @@ async def _create_plan_async(cfg: dict[str, Any], seed: int | None) -> dict[str,
 
     return {
         "mode": "planned_rows",
+        "acceptance_mode": acceptance_mode,
+        "accepted_row_target": count,
+        "candidate_rows": len(rows),
         "rows": rows,
         "benchmark": "ifbench",
         "language_counts": dict(Counter(str(row["language"]) for row in rows)),
@@ -496,17 +525,31 @@ def _write_dataset(
     outputs_dir: Path,
 ) -> Path:
     dataset_path = outputs_dir / "dataset.jsonl"
+    rejections_path = outputs_dir / "rejections.jsonl"
     row_plans = list(plan["rows"])
     completed = store.jsonl_count(dataset_path)
+    rejected = store.jsonl_count(rejections_path)
+    target_count = int(plan.get("accepted_row_target", len(row_plans)))
+    acceptance_mode = str(plan.get("acceptance_mode", ""))
 
-    assert completed <= len(row_plans), "dataset.jsonl has more rows than the saved plan"
-    if completed == len(row_plans):
+    assert completed <= target_count, "dataset.jsonl has more accepted rows than the saved target"
+    assert completed + rejected <= len(row_plans), "generated rows exceed the saved candidate plan"
+    if completed == target_count:
         return dataset_path
 
-    _stream_rows(row_plans, cfg, dataset_path, completed=completed)
+    _stream_rows(
+        row_plans,
+        cfg,
+        dataset_path,
+        rejections_path,
+        completed=completed,
+        rejected=rejected,
+        target_count=target_count,
+        acceptance_mode=acceptance_mode,
+    )
 
     final_count = store.jsonl_count(dataset_path)
-    assert final_count == len(row_plans), "dataset.jsonl row count does not match the saved plan"
+    assert final_count == target_count, "dataset.jsonl row count does not match the accepted row target"
     return dataset_path
 
 
@@ -514,8 +557,12 @@ def _stream_rows(
     row_plans: list[dict[str, Any]],
     cfg: dict[str, Any],
     dataset_path: Path,
+    rejections_path: Path,
     *,
     completed: int,
+    rejected: int,
+    target_count: int,
+    acceptance_mode: str,
 ) -> None:
     writer = _load_scenario_writer(cfg)
     answer_teacher = _load_answer_teacher(cfg)
@@ -525,9 +572,13 @@ def _stream_rows(
 
     asyncio.run(
         _stream_rows_async(
-            row_plans[completed:],
+            row_plans[completed + rejected:],
             dataset_path=dataset_path,
-            start_index=completed,
+            rejections_path=rejections_path,
+            start_index=completed + rejected,
+            accepted_count=completed,
+            target_count=target_count,
+            acceptance_mode=acceptance_mode,
             writer=writer,
             answer_teacher=answer_teacher,
             scenario_temperature=scenario_temperature,
@@ -585,7 +636,11 @@ async def _stream_rows_async(
     row_plans: list[dict[str, Any]],
     *,
     dataset_path: Path,
+    rejections_path: Path,
     start_index: int,
+    accepted_count: int,
+    target_count: int,
+    acceptance_mode: str,
     writer: LLM,
     answer_teacher: LLM | None,
     scenario_temperature: float,
@@ -612,14 +667,27 @@ async def _stream_rows_async(
             )
 
     mode = "a" if dataset_path.exists() else "w"
-    with dataset_path.open(mode) as handle:
-        async for row in map_async_ordered(
+    rejections_mode = "a" if rejections_path.exists() else "w"
+    with dataset_path.open(mode) as dataset_handle, rejections_path.open(rejections_mode) as rejections_handle:
+        async for row in map_async_unordered(
             row_plans,
             worker,
             concurrency=concurrency,
             total=len(row_plans),
         ):
-            store.append_jsonl_line(handle, row)
+            if acceptance_mode == "strict_pass":
+                verified = _verify_rows_only([row])[0]
+                if _row_failed(verified):
+                    store.append_jsonl_line(rejections_handle, verified)
+                    continue
+
+                store.append_jsonl_line(dataset_handle, verified)
+                accepted_count += 1
+                if accepted_count >= target_count:
+                    break
+                continue
+
+            store.append_jsonl_line(dataset_handle, row)
 
 
 def _row_generation_concurrency(
@@ -1105,6 +1173,36 @@ def _response_follows_loose(row: dict[str, Any]) -> dict[str, Any]:
 
 
 def _dataset_checks(rows: list[dict[str, Any]], plan: dict[str, Any]) -> dict[str, Any]:
+    if plan.get("acceptance_mode"):
+        checks = {
+            "row_count": {
+                "passed": len(rows) == int(plan["accepted_row_target"]),
+                "expected": int(plan["accepted_row_target"]),
+                "observed": len(rows),
+            },
+            "unique_prompts": {
+                "passed": len({str(row["prompt"]) for row in rows}) == len(rows),
+                "expected": len(rows),
+                "observed": len({str(row["prompt"]) for row in rows}),
+            },
+        }
+        return {
+            "passed": all(bool(check["passed"]) for check in checks.values()),
+            "checks": checks,
+            "observed_counts": {
+                "language_counts": dict(Counter(str(row["meta"]["language"]) for row in rows)),
+                "interaction_style_counts": dict(Counter(str(row["meta"]["interaction_style"]) for row in rows)),
+                "response_shape_counts": dict(Counter(str(row["meta"]["response_shape"]) for row in rows)),
+                "constraint_counts": dict(
+                    Counter(
+                        str(constraint["id"])
+                        for row in rows
+                        for constraint in row["hidden"]["constraints"]
+                    )
+                ),
+            },
+        }
+
     checks = {
         "row_count": {
             "passed": len(rows) == len(plan["rows"]),
@@ -1262,6 +1360,28 @@ def _positive_int(record: dict[str, Any], key: str, *, default: int) -> int:
         return default
     assert isinstance(value, int) and value > 0, f"{key} must be a positive integer"
     return value
+
+
+def _acceptance_mode(generation: dict[str, Any]) -> str:
+    raw = generation.get("acceptance_mode")
+    if raw is None:
+        return "strict_pass" if generation.get("attach_targets", False) else ""
+    value = str(raw)
+    assert value in {"", "strict_pass"}, "generation acceptance_mode must be empty or strict_pass"
+    return value
+
+
+def _candidate_count(generation: dict[str, Any], *, target_count: int) -> int:
+    configured = generation.get("candidate_count")
+    if configured is not None:
+        assert isinstance(configured, int) and configured >= target_count, (
+            "generation candidate_count must be an integer >= generation count"
+        )
+        return configured
+
+    multiplier = float(generation.get("candidate_multiplier", 2.0))
+    assert multiplier >= 1.0, "generation candidate_multiplier must be >= 1.0"
+    return max(target_count, math.ceil(target_count * multiplier))
 
 
 def _languages(generation: dict[str, Any]) -> tuple[LanguageCode, ...]:

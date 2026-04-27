@@ -53,6 +53,7 @@ If you also want target responses attached during build, set:
 
 Those responses are verified with the same deterministic checker layer. When targets are attached, `messages` includes the final assistant turn so the row is a full conversation.
 For this pack, `answer_teacher` generation defaults to `temperature: 0.7` unless a config overrides it, so low-quality outputs can be filtered rather than suppressed upfront.
+With attached targets, `generation.count` is the number of strict-pass rows to emit. Failed attempts are written to `rejections.jsonl`, and `generation.candidate_multiplier` controls how many candidate rows are planned to reach the accepted target.
 
 The `ifbench_laerebogen_da.yaml` config now does this by default, so Danish `laerebogen` runs produce full conversations and can be checked with strict and loose response verification.
 

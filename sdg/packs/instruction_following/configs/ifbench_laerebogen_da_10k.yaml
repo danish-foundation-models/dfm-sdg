@@ -12,6 +12,7 @@ models:
     timeout_seconds: 600
 generation:
   count: 10000
+  candidate_multiplier: 2.0
   row_concurrency: 20
   languages: [da]
   interaction_styles: [single_turn, multi_turn_isolation]

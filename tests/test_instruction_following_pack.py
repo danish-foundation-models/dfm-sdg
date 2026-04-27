@@ -1316,6 +1316,96 @@ def test_instruction_following_build_keeps_other_rows_when_answer_teacher_fails(
     assert verification["failed_rows"] == 1
 
 
+def test_instruction_following_build_count_targets_strict_pass_rows(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("SDG_ARTIFACTS_ROOT", str(tmp_path / "artifacts"))
+    monkeypatch.setenv("SDG_REPORTS_ROOT", str(tmp_path / "reports"))
+    monkeypatch.setattr(
+        instruction_following_build_module,
+        "_load_scenario_writer",
+        lambda cfg: FakeScenarioWriter(),
+    )
+    monkeypatch.setattr(
+        instruction_following_build_module,
+        "_load_answer_teacher",
+        lambda cfg: FakeAnswerTeacher(),
+    )
+    monkeypatch.setattr(
+        instruction_following_build_module,
+        "_create_plan",
+        lambda cfg, seed: {
+            "mode": "planned_rows",
+            "acceptance_mode": "strict_pass",
+            "accepted_row_target": 2,
+            "candidate_rows": 3,
+            "rows": [
+                {
+                    "language": "en",
+                    "interaction_style": "single_turn",
+                    "response_shape": "plain_text",
+                    "scenario_kind": "announcement",
+                    "topic": "a rejected public library row",
+                    "prompt_seed": {"text": "Write a short answer about the public library."},
+                    "constraints": [{"id": "start_end:first_word", "params": {"word": "copper"}}],
+                },
+                {
+                    "language": "en",
+                    "interaction_style": "single_turn",
+                    "response_shape": "plain_text",
+                    "scenario_kind": "announcement",
+                    "topic": "an accepted public library row",
+                    "prompt_seed": {"text": "Write a short answer about the public library."},
+                    "constraints": [{"id": "start_end:first_word", "params": {"word": "amber"}}],
+                },
+                {
+                    "language": "en",
+                    "interaction_style": "single_turn",
+                    "response_shape": "plain_text",
+                    "scenario_kind": "announcement",
+                    "topic": "another accepted public library row",
+                    "prompt_seed": {"text": "Write a short answer about the public library."},
+                    "constraints": [{"id": "start_end:first_word", "params": {"word": "amber"}}],
+                },
+            ],
+            "benchmark": "ifbench",
+            "language_counts": {"en": 3},
+            "interaction_style_counts": {"single_turn": 3},
+            "response_shape_counts": {"plain_text": 3},
+            "constraint_counts": {"start_end:first_word": 3},
+        },
+    )
+
+    cfg = {
+        "pack": "instruction_following",
+        "reuse_completed": False,
+        "models": {
+            "scenario_writer": "openai",
+            "answer_teacher": "openai",
+        },
+        "generation": {
+            "count": 2,
+            "languages": ["en"],
+            "interaction_style": "single_turn",
+            "response_shapes": ["plain_text"],
+            "attach_targets": True,
+            "train_fraction": 0.8,
+        },
+    }
+
+    result = build(cfg)
+    loaded = load(result.run_id)
+    rows = store.read_jsonl(Path(loaded.artifacts["dataset"].path))
+    rejections = store.read_jsonl(Path(loaded.artifacts["rejections"].path))
+
+    assert len(rows) == 2
+    assert len(rejections) == 1
+    assert all(row["checks"]["response_follows_strict"]["passed"] for row in rows)
+    assert not rejections[0]["checks"]["response_follows_strict"]["passed"]
+
+    verification = verify(result.run_id)
+    assert verification["verified_rows"] == 2
+    assert verification["failed_rows"] == 0
+
+
 def test_instruction_following_build_keeps_other_rows_when_one_row_crashes(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("SDG_ARTIFACTS_ROOT", str(tmp_path / "artifacts"))
     monkeypatch.setenv("SDG_REPORTS_ROOT", str(tmp_path / "reports"))
