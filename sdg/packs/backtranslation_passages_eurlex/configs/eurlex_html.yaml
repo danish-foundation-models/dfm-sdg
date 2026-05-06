@@ -22,4 +22,4 @@ generation:
   min_article_chars: 900
   temperature: 0.8
   train_fraction: 0.9
-  max_articles: 5000
+  max_articles: null
