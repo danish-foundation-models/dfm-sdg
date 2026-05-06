@@ -1,0 +1,8 @@
+name: multi_turn_dialogue
+description: Blueprint-first multi-turn dialogue pack with skeletons, user simulation, review, verification, and preference pairs.
+entrypoints:
+  build: sdg.packs.multi_turn_dialogue.build:build
+  verify: sdg.packs.multi_turn_dialogue.build:verify
+  summarize: sdg.packs.multi_turn_dialogue.build:summarize
+  publish: sdg.packs.multi_turn_dialogue.build:publish
+  viewer: sdg.packs.multi_turn_dialogue.viewer:viewer_spec

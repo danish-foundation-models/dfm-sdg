@@ -1,0 +1,54 @@
+pack: multi_turn_dialogue
+seed: 17
+reuse_completed: true
+models:
+  blueprint_writer:
+    endpoint: openai
+    timeout_seconds: 900
+  intent_modeler:
+    endpoint: openai
+    timeout_seconds: 900
+  skeleton_writer:
+    endpoint: openai
+    timeout_seconds: 900
+  user_simulator:
+    endpoint: openai
+    timeout_seconds: 900
+  assistant_teacher:
+    endpoint: openai
+    timeout_seconds: 900
+  reviewer:
+    endpoint: openai
+    timeout_seconds: 900
+  preference_writer:
+    endpoint: openai
+    timeout_seconds: 900
+generation:
+  count: 2
+  candidate_multiplier: 2
+  train_fraction: 0.75
+  languages: [da]
+  latent_language: en
+  seed_expansion:
+    variants_per_seed: 8
+  seed_sources:
+    - type: handwritten
+      path: seed_sources/handwritten_da.yaml
+  families:
+    - general_chat
+    - grounded_dialogue
+  include_preference_pairs: true
+  repair_failed_reviews: true
+  strict_review: true
+  review_accept_threshold: 0.8
+  strict_review_accept_threshold: 0.9
+  shuffle_seeds: true
+  generate_scenario_instances: true
+  scenario_temperature: 0.9
+  blueprint_temperature: 0.5
+  intent_temperature: 0.3
+  skeleton_temperature: 0.4
+  user_temperature: 0.7
+  assistant_temperature: 0.5
+  review_temperature: 0.0
+  preference_temperature: 0.5

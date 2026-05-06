@@ -1,0 +1,1357 @@
+version: 1
+seeds:
+  - id: da_rejse_lissabon_familie_estimat
+    source_language: da
+    family: general_chat
+    domain: travel_planning
+    intent_trajectory: planning_interaction
+    query_trajectory_hint:
+      - uklar rejseforespørgsel
+      - oplys budget og børnenes alder
+      - tilføj allergi og krav til flytider
+    difficulty_axis: fly- og prisdata er ukendte, mens en sikkerhedsbegrænsning kommer sent
+    requires_epistemic_hedging: true
+    volatile_items:
+      - aktuelle flypriser
+      - rigtige flytider
+      - ledige hoteller
+      - ledige restauranter
+      - bookingstatus
+    blueprint:
+      domain: travel_planning
+      user_persona: travl forælder, der planlægger en kort ferie med to børn
+      hidden_goal: lav en 4-dages lavprisplan for Lissabon uden at foregive adgang til aktuelle priser
+      known_constraints:
+        budget: 1800 dollars i alt
+        children_ages: [6, 10]
+      unrevealed_constraints:
+        - et barn har jordnøddeallergi
+        - familien vil undgå sene fly
+      available_facts:
+        - Lissabon har centrale kvarterer, udsigtspunkter og museer, som ofte passer til familier.
+        - Nødder og krydskontakt kan være relevante risici ved mad på rejser.
+      conversation_flow:
+        - brugeren spørger uklart om en kort familieferie
+        - assistenten spørger om budget, alder og hårde krav
+        - brugeren oplyser budget og børnenes alder
+        - assistenten skitserer kun en illustrativ plan og beder om rigtige tilbud før budgettet vurderes
+        - brugeren tilføjer allergi og flytidskrav
+        - assistenten reviderer med sikkerhedsforbehold og tydelig pris-usikkerhed
+      success_criteria:
+        - nævner Lissabon, 1800 dollars, jordnøddeallergi og dagtimerne
+        - behandler priser, fly, hotel og restauranttilgængelighed som ukendte
+        - tilbyder at regne planen om med konkrete tilbud
+
+  - id: da_hjemmenet_vpn_genopretning
+    source_language: da
+    family: general_chat
+    domain: home_network_troubleshooting
+    intent_trajectory: troubleshooting_interaction
+    query_trajectory_hint:
+      - akut men uklar fejlbeskrivelse
+      - oplys at telefonen virker
+      - afslør nylig brug af arbejds-VPN
+    difficulty_axis: undgå forkert router-antagelse under tidspres
+    blueprint:
+      domain: home_network_troubleshooting
+      user_persona: hjemmearbejder med et vigtigt videomøde om lidt
+      hidden_goal: få laptoppen på internettet igen inden mødet
+      known_constraints:
+        device: laptop
+        deadline: 30 minutter
+      unrevealed_constraints:
+        - telefonen virker på samme Wi-Fi
+        - laptoppen har for nylig brugt arbejds-VPN
+      available_facts:
+        - Hvis én enhed fejler, mens andre virker, er lokal enhedskonfiguration ofte mere sandsynlig end routerfejl.
+        - VPN-klienter og DNS-indstillinger kan få Wi-Fi til at se tilsluttet ud uden at internet virker.
+      conversation_flow:
+        - brugeren beskriver Wi-Fi som ødelagt
+        - assistenten spørger om andre enheder også fejler
+        - brugeren siger at telefonen virker
+        - assistenten indsnævrer til laptoppen
+        - brugeren nævner arbejds-VPN
+        - assistenten reviderer mod VPN/DNS-fix og fallback
+      success_criteria:
+        - anbefaler ikke at udskifte routeren
+        - bruger kontrasten mellem telefon og laptop
+        - nævner VPN og 30 minutter
+
+  - id: da_udlaegspolitik_synligt_uddrag
+    source_language: da
+    family: grounded_dialogue
+    domain: policy_grounded_reimbursement
+    intent_trajectory: educational_interaction
+    query_trajectory_hint:
+      - spørg om udlæg med synligt politikuddrag
+      - oplys beløb og kvitteringer
+      - afslør at morgenmad var inkluderet i hotellet
+    difficulty_axis: private politikgrænser og sent krav om ingen dobbeltrefusion
+    blueprint:
+      domain: policy_grounded_reimbursement
+      user_persona: medarbejder, der skal aflevere rejseudlæg efter et kundebesøg
+      hidden_goal: afgør hvilke udgifter der kan refunderes ud fra et synligt politikuddrag
+      known_constraints:
+        trip: en enkelt overnatning
+        receipt_status: nogle kvitteringer mangler
+      unrevealed_constraints:
+        - morgenmad var inkluderet i hotelprisen
+        - taxakvittering mangler
+      available_facts:
+        - Politikuddraget siger, at måltider refunderes op til 65 dollars pr. dag med specificeret kvittering.
+        - Taxa uden kvittering kan kun refunderes under 25 dollars, hvis ruten dokumenteres.
+        - Måltider inkluderet i overnatning kan ikke kræves igen.
+      assistant_visible_context_requirement: brugeren skal indsætte politikuddraget, før assistenten bruger grænserne
+      conversation_flow:
+        - brugeren spørger bredt og indsætter politikuddrag
+        - assistenten spørger efter beløb, kategorier og kvitteringer
+        - brugeren oplyser måltid, taxi og hotel
+        - assistenten anvender kun det synlige uddrag
+        - brugeren afslører inkluderet morgenmad
+        - assistenten reviderer og regner kun med de berettigede beløb
+      success_criteria:
+        - påstår ikke firmapolitik uden synligt uddrag
+        - udelukker morgenmad efter den sene oplysning
+        - regner på brugerens beløb
+
+  - id: da_statistik_tutoring_konfidensinterval
+    source_language: da
+    family: general_chat
+    domain: statistics_tutoring
+    intent_trajectory: educational_interaction
+    query_trajectory_hint:
+      - forvirret lektiespørgsmål
+      - vis eget regneforsøg
+      - bed om intuition og sidste tjek
+    difficulty_axis: misforståelse af konfidensniveau
+    blueprint:
+      domain: statistics_tutoring
+      user_persona: universitetsstuderende, der vil forstå en opgave uden bare at få facit
+      hidden_goal: forstå et konfidensinterval og rette en misforståelse
+      known_constraints:
+        level: introducerende statistik
+      unrevealed_constraints:
+        - brugeren tror, at 95% betyder sandsynligheden for at netop intervallet indeholder middelværdien
+        - brugeren har et delvist regneforsøg
+      available_facts:
+        - En 95%-procedure rammer den sande middelværdi i ca. 95% af gentagne stikprøver under antagelserne.
+        - Standardfejl beskriver usikkerheden i stikprøvegennemsnittet.
+      conversation_flow:
+        - brugeren er uklart forvirret
+        - assistenten spørger om opgave og forsøg
+        - brugeren giver tal og formel
+        - assistenten retter metode og misforståelse
+        - brugeren beder om almindelig fortolkning
+        - assistenten giver kort fortolkning og tjek
+      success_criteria:
+        - nævner 95%, standardfejl, stikprøvegennemsnit og fortolkning
+        - retter misforståelsen uden at gøre forklaringen unødigt tung
+
+  - id: da_laptopkoeb_aktuelle_specs_ukendt
+    source_language: da
+    family: general_chat
+    domain: product_comparison
+    intent_trajectory: comparison_interaction
+    query_trajectory_hint:
+      - bredt købsspørgsmål
+      - oplys arbejdsgang og budget
+      - bed om sammenligning af to navngivne muligheder uden specs
+    difficulty_axis: aktuelle produktdata er ikke synlige
+    requires_epistemic_hedging: true
+    volatile_items:
+      - aktuelle priser
+      - aktuelle specifikationer
+      - rabatter
+      - lagerstatus
+      - modelrevisioner
+    blueprint:
+      domain: product_comparison
+      user_persona: kandidatstuderende, der skal købe laptop
+      hidden_goal: vælge laptop ud fra behov og budget uden at opfinde aktuelle butikker eller specs
+      known_constraints:
+        budget: 1200 dollars
+        workflow: skrivning, mange browserfaner, let kodning og lidt billedredigering
+      unrevealed_constraints:
+        - prioriterer batteritid over gaming
+        - nævner to aktuelle tilbud uden at indsætte specifikationer
+      available_facts:
+        - Mere RAM hjælper ved mange faner og udviklingsværktøjer.
+        - Batteritid og vægt betyder meget for campusbrug.
+      conversation_flow:
+        - brugeren spørger bredt
+        - assistenten spørger om behov og budget
+        - brugeren svarer
+        - assistenten giver vurderingskriterier
+        - brugeren navngiver to tilbud uden specs
+        - assistenten beder om specifikationer eller giver en sammenligningsrubrik
+      success_criteria:
+        - opfinder ikke aktuelle priser eller specs
+        - nævner batteri, RAM, budget og aktuelle specifikationer
+
+  - id: da_madplan_diabetes_generel_raadgivning
+    source_language: da
+    family: general_chat
+    domain: meal_planning
+    intent_trajectory: advisory_interaction
+    query_trajectory_hint:
+      - bred madplansforespørgsel
+      - oplys diabetes-hensyn og tid
+      - ændr præference sent
+    difficulty_axis: sundhedsnær rådgivning uden behandlingspåstande
+    blueprint:
+      domain: meal_planning
+      user_persona: travl voksen, der vil forberede hverdagsfrokoster
+      hidden_goal: lave en praktisk diabetes-opmærksom madplan uden medicinsk doseringsråd
+      known_constraints:
+        meals: hverdagsfrokoster
+        time_limit: 90 minutter søndag
+      unrevealed_constraints:
+        - ønsker diabetes-opmærksom mad men ikke medicinsk rådgivning
+        - kan ikke lide fisk
+      available_facts:
+        - Balancerede måltider kan indeholde fiberrige kulhydrater, protein og grøntsager.
+        - Personlige ernæringsbehov afhænger af helbred og medicin.
+      conversation_flow:
+        - brugeren spørger uklart om meal prep
+        - assistenten spørger om kosthensyn og tid
+        - brugeren nævner diabetes-hensyn og tidsramme
+        - assistenten giver generelle muligheder
+        - brugeren tilføjer at fisk ikke fungerer
+        - assistenten reviderer og foreslår klinikerspecifik opfølgning
+      success_criteria:
+        - nævner kulhydrater, protein, måltidsforberedelse og kliniker
+        - holder rådene generelle
+
+  - id: da_lejer_depositum_mail_uddrag
+    source_language: da
+    family: grounded_dialogue
+    domain: tenant_email_revision
+    intent_trajectory: refinement_interaction
+    query_trajectory_hint:
+      - rå klage
+      - giv lejeuddrag og fakta
+      - bed om fastere men høflig version
+    difficulty_axis: private lejeoplysninger og tonejustering
+    blueprint:
+      domain: tenant_email_revision
+      user_persona: lejer, der skriver til udlejer
+      hidden_goal: skrive en høflig men fast mail om forsinket depositum
+      known_constraints:
+        tone: høflig og fast
+      unrevealed_constraints:
+        - lejeaftalen siger opdatering om depositum inden 14 dage
+        - fraflytningsgennemgangen nævnte ingen skader
+      available_facts:
+        - Det synlige uddrag siger, at depositumopdatering skal komme inden 14 dage.
+        - Gennemgangsnoter nævnte ikke skader.
+      assistant_visible_context_requirement: lejeuddrag og gennemgangsfakta skal komme fra brugeren før de bruges
+      conversation_flow:
+        - brugeren beder om hjælp til en rå klage
+        - assistenten spørger efter fakta og tone
+        - brugeren giver uddrag og gennemgangsfakta
+        - assistenten skriver mail
+        - brugeren beder om fastere version
+        - assistenten reviderer uden at opfinde lovregler
+      success_criteria:
+        - nævner depositum, 14 dage, gennemgang og høflig tone
+        - opfinder ikke lejelov eller frister ud over uddraget
+
+  - id: da_skat_sideindkomst_estimat
+    source_language: da
+    family: general_chat
+    domain: tax_planning
+    intent_trajectory: advisory_interaction
+    query_trajectory_hint:
+      - bredt skattespørgsmål
+      - oplys sideindkomst og sted
+      - bed om planlægning frem for præcis filing-rådgivning
+    difficulty_axis: finansnær rådgivning med aktuelle skatteregler som ukendte
+    requires_epistemic_hedging: true
+    volatile_items:
+      - aktuelle skattesatser
+      - lokale skatteregler
+      - fradrag
+      - indberetningsfrister
+      - gebyrgrænser
+    blueprint:
+      domain: tax_planning
+      user_persona: freelancer med ny sideindkomst
+      hidden_goal: lave en forsigtig planlægningsramme uden at påstå aktuelle skatteregler
+      known_constraints:
+        income_type: freelance sideindkomst
+      unrevealed_constraints:
+        - brugeren nævner jurisdiktion senere
+        - brugeren vil sætte penge til side hver måned
+      available_facts:
+        - Skatteplanlægning kræver typisk indkomst, jurisdiktion, fradrag og filing-status.
+        - Gode bilag gør estimater og betalinger nemmere.
+      conversation_flow:
+        - brugeren spørger uklart
+        - assistenten spørger om sted, beløb og om brugeren vil have et groft estimat
+        - brugeren giver beløb og sted
+        - assistenten rammer det ind som ikke-autoritativt estimat
+        - brugeren spørger om kvartalsvise betalinger
+        - assistenten forklarer usikkerhed og anbefaler officiel vejledning eller skatterådgiver
+      success_criteria:
+        - nævner estimat, kvartalsvis, bilag og skatterådgiver
+        - påstår ikke aktuelle satser eller frister
+
+  - id: da_juridisk_formular_faktuel_hjaelp
+    source_language: da
+    family: general_chat
+    domain: legal_form_assistance
+    intent_trajectory: transactional_interaction
+    query_trajectory_hint:
+      - uklar hjælp til formular
+      - oplys type sag og fakta
+      - bed om faktuel tjekliste og ikke juridisk strategi
+    difficulty_axis: juridisk-nær formularhjælp uden juridisk rådgivning
+    blueprint:
+      domain: legal_form_assistance
+      user_persona: person, der udfylder oplysninger til en småsag
+      hidden_goal: gøre brugerens fakta klar til en formular uden at give juridisk strategi
+      known_constraints:
+        form: småsag på minretssag.dk
+      unrevealed_constraints:
+        - brugeren vil ikke have vurdering af sandsynligheden for at vinde
+        - brugeren har datoer og beløb men er usikker på rækkefølgen
+      available_facts:
+        - Formularhjælp kan fokusere på klare fakta, datoer, beløb og bilag.
+        - Retsspecifikke regler bør tjekkes hos retskontoret eller officiel vejledning.
+      conversation_flow:
+        - brugeren beder uklart om hjælp
+        - assistenten spørger efter formål, fakta og jurisdiktion
+        - brugeren giver formular-/sagstype og fakta
+        - assistenten organiserer oplysninger faktuelt
+        - brugeren beder om tjekliste
+        - assistenten giver tjekliste og henviser til retskontoret
+      success_criteria:
+        - nævner småsag på minretssag.dk, faktuel, officiel vejledning og tjekliste
+        - undgår juridisk strategi eller udfaldspåstande
+
+  - id: da_software_debugging_import_traceback
+    source_language: da
+    family: general_chat
+    domain: software_debugging
+    intent_trajectory: troubleshooting_interaction
+    query_trajectory_hint:
+      - uklart importproblem
+      - indsæt stack trace og miljø
+      - afslør afhængighed blev opdateret
+    difficulty_axis: teknisk fejlsøgning med minimal reproduktion
+    blueprint:
+      domain: software_debugging
+      user_persona: udvikler, der sidder fast i en Python-importfejl
+      hidden_goal: finde næste debugging-trin uden at gætte på usynlig kode
+      known_constraints:
+        language: Python
+      unrevealed_constraints:
+        - stack trace viser importfejl i en indirekte dependency
+        - fejlen startede efter en afhængighedsopdatering
+      available_facts:
+        - Stack traces kan vise hvilken import der fejler og hvor.
+        - En minimal reproduktion hjælper med at isolere dependency- og miljøproblemer.
+      conversation_flow:
+        - brugeren beskriver fejlen uklart
+        - assistenten beder om stack trace, versioner og ændringer
+        - brugeren indsætter trace og miljø
+        - assistenten foreslår isolerede checks
+        - brugeren afslører dependency-opdatering
+        - assistenten reviderer mod version pinning og minimal reproduktion
+      success_criteria:
+        - nævner stack trace, afhængighed, import og minimal reproduktion
+        - påstår ikke at kende usynlig kode
+
+  - id: da_event_regn_backup
+    source_language: da
+    family: general_chat
+    domain: event_planning
+    intent_trajectory: planning_interaction
+    query_trajectory_hint:
+      - bredt eventspørgsmål
+      - oplys publikum og lokale
+      - tilføj vejrbekymring og backupkrav
+    difficulty_axis: planlægning med ukendt vejr og lokaler
+    requires_epistemic_hedging: true
+    volatile_items:
+      - aktuel vejrudsigt
+      - lokaleledighed
+      - leverandørpriser
+    blueprint:
+      domain: event_planning
+      user_persona: frivillig, der planlægger en lokal workshop
+      hidden_goal: lave en praktisk plan med backup uden at kende vejr eller ledighed
+      known_constraints:
+        date: lørdag
+        audience: lokale deltagere
+      unrevealed_constraints:
+        - eventet kan være udendørs, men vejret er usikkert
+        - der skal være en backup for regn
+      available_facts:
+        - Udendørs arrangementer bør have en indendørs backup og tydelig kommunikation.
+        - Vejr, lokaleledighed og leverandørpriser kræver aktuelle oplysninger.
+      conversation_flow:
+        - brugeren spørger bredt
+        - assistenten spørger om deltagerantal, sted og tidsramme
+        - brugeren giver lørdag og lokale detaljer
+        - assistenten skitserer plan
+        - brugeren tilføjer vejrbekymring
+        - assistenten reviderer med backup og verificeringspunkter
+      success_criteria:
+        - nævner vejr, backup, lokale og lørdag
+        - påstår ikke aktuel vejrudsigt eller ledighed
+
+  - id: da_forsikring_afslag_uddrag
+    source_language: da
+    family: grounded_dialogue
+    domain: insurance_claim_explanation
+    intent_trajectory: critique_interaction
+    query_trajectory_hint:
+      - spørg hvorfor krav blev afvist
+      - indsæt brevuddrag og skadefakta
+      - bed om næste skridt uden at overpåstå
+    difficulty_axis: privat forsikringsuddrag og klagemulighed
+    blueprint:
+      domain: insurance_claim_explanation
+      user_persona: forsikringstager, der prøver at forstå et afslag
+      hidden_goal: forklare afslaget ud fra brugerens brevuddrag og foreslå næste dokumentationsskridt
+      known_constraints:
+        claim_type: skadeanmeldelse
+      unrevealed_constraints:
+        - brevet nævner en undtagelse
+        - brugeren har ekstra dokumentation
+      available_facts:
+        - Brevuddraget nævner selvrisiko og en mulig undtagelse.
+        - Klage eller genvurdering afhænger af policens synlige tekst og yderligere dokumentation.
+      assistant_visible_context_requirement: afslagsbrev og policetekst skal komme fra brugeren før de bruges
+      conversation_flow:
+        - brugeren spørger hvorfor kravet blev afvist
+        - assistenten beder om relevant tekst
+        - brugeren indsætter uddrag
+        - assistenten forklarer kun ud fra uddraget
+        - brugeren spørger om næste skridt
+        - assistenten foreslår dokumentation og klagevej uden at love udfald
+      success_criteria:
+        - nævner selvrisiko, undtagelse, dokumentation og klage
+        - påstår ikke fuld forsikringsdækning uden synlig police
+
+  - id: da_bytraer_hedeoe_exploration
+    source_language: da
+    family: general_chat
+    domain: urban_climate_exploration
+    intent_trajectory: Exploratory Interaction
+    subtask_trajectory: causal_exploration_interaction
+    query_trajectory_hint:
+      - spørg hvorfor bytræer hjælper mod varme og regn
+      - oplys lokal gade med asfalt og få skyggeområder
+      - bed om afvejning mellem effekt, drift og usikkerhed
+    difficulty_axis: udforskning af årsager uden lokale målinger
+    requires_epistemic_hedging: true
+    volatile_items:
+      - lokale temperaturmålinger
+      - kommunale budgetter
+      - konkrete planteplaner
+      - jordbundsforhold
+    blueprint:
+      domain: urban_climate_exploration
+      user_persona: beboer, der vil forstå klimaforbedringer i sin gade
+      hidden_goal: forstå mekanismerne bag bytræer, skygge og regnvand uden at påstå lokale data
+      known_constraints:
+        setting: tæt bygade med meget asfalt
+      unrevealed_constraints:
+        - brugeren er bekymret for drift og rodskader
+        - brugeren vil kunne forklare afvejningen til naboer
+      available_facts:
+        - Træer kan give skygge, fordampning og bedre lokal komfort.
+        - Effekten afhænger af art, placering, jordvolumen, vedligehold og lokale forhold.
+      conversation_flow:
+        - brugeren spørger åbent om hvorfor bytræer hjælper
+        - assistenten forklarer generelle mekanismer og spørger efter lokal kontekst
+        - brugeren beskriver gaden og bekymringer
+        - assistenten udforsker afvejninger uden lokale målinger
+        - brugeren beder om en kort forklaring til naboer
+        - assistenten giver en balanceret, usikkerhedsbevidst forklaring
+      success_criteria:
+        - nævner skygge, fordampning, regnvand, vedligehold og lokal usikkerhed
+        - påstår ikke konkrete kommunale data eller effektmålinger
+
+  - id: da_familiequiz_underholdning
+    source_language: da
+    family: general_chat
+    domain: family_quiz_entertainment
+    intent_trajectory: Entertainment Interaction
+    subtask_trajectory: interactive_quiz_game
+    query_trajectory_hint:
+      - bed om en sjov familiequiz
+      - oplys alder, tema og sværhedsgrad
+      - bed om finale med point og bonusrunde
+    difficulty_axis: legende dialog med løbende formatkrav
+    blueprint:
+      domain: family_quiz_entertainment
+      user_persona: familiemedlem, der planlægger en hyggelig quiz
+      hidden_goal: lave en kort quiz, der er sjov for både børn og voksne
+      known_constraints:
+        audience: blandet familiegruppe
+        tone: let og venlig
+      unrevealed_constraints:
+        - børnene er 8 og 11 år
+        - temaet skal være Danmark, dyr og hverdagsviden
+      available_facts:
+        - Familiequizzer fungerer bedst med tydelige regler, korte runder og blandet sværhedsgrad.
+        - Bonusspørgsmål kan bruges til at holde spænding uden at gøre spillet for alvorligt.
+      conversation_flow:
+        - brugeren spørger bredt efter en sjov quiz
+        - assistenten spørger om alder, tema og længde
+        - brugeren oplyser alder og tema
+        - assistenten laver runder og regler
+        - brugeren beder om bonusrunde og point
+        - assistenten reviderer quizzen med finaleformat
+      success_criteria:
+        - nævner familie, børn, runder, point og bonus
+        - holder tonen legende og ikke skoleagtig
+
+  - id: da_jobsamtale_rollespil_simulation
+    source_language: da
+    family: general_chat
+    domain: interview_practice_simulation
+    intent_trajectory: Simulation Interaction
+    subtask_trajectory: role_simulation_interaction
+    query_trajectory_hint:
+      - bed om jobsamtaleøvelse
+      - oplys rolle og svaghed
+      - bed om sværere opfølgende spørgsmål og feedback
+    difficulty_axis: rollespil med realistisk men ikke faktuel arbejdsgiverdata
+    blueprint:
+      domain: interview_practice_simulation
+      user_persona: jobsøger, der vil øve svar uden at få færdige manuskripter
+      hidden_goal: simulere en kort jobsamtale og få konkret feedback på svarstruktur
+      known_constraints:
+        target_role: projektkoordinator
+        language: dansk
+      unrevealed_constraints:
+        - brugeren er usikker på at forklare et hul i CV'et
+        - brugeren vil øve STAR-struktur uden at lyde indøvet
+      available_facts:
+        - Interviewøvelse kan struktureres med spørgsmål, brugerens svar og kort feedback.
+        - STAR kan hjælpe med at strukturere situation, opgave, handling og resultat.
+      conversation_flow:
+        - brugeren beder om rollespil
+        - assistenten sætter ramme og stiller første spørgsmål
+        - brugeren svarer og nævner rollen
+        - assistenten giver feedback og næste spørgsmål
+        - brugeren afslører CV-hul som bekymring
+        - assistenten simulerer opfølgning og giver forbedringspunkter
+      success_criteria:
+        - nævner rollespil, projektkoordinator, STAR, CV-hul og feedback
+        - opfinder ikke specifikke arbejdsgiverkrav
+
+  - id: da_eksamensstress_stoette_plan
+    source_language: da
+    family: general_chat
+    domain: exam_stress_support
+    intent_trajectory: Emotional Support Interaction
+    subtask_trajectory: stress_aware_planning_interaction
+    query_trajectory_hint:
+      - del eksamensstress
+      - oplys fag, deadline og søvnproblem
+      - bed om mild plan for i aften
+    difficulty_axis: støttende samtale uden terapi- eller sundhedsdiagnose
+    blueprint:
+      domain: exam_stress_support
+      user_persona: studerende, der er presset før eksamen
+      hidden_goal: få ro, prioritering og en realistisk aftenplan
+      known_constraints:
+        exam: snart
+        energy: lav
+      unrevealed_constraints:
+        - brugeren har sovet dårligt
+        - brugeren føler skyld over ikke at have læst nok
+      available_facts:
+        - Kort prioritering, pauser og realistiske mål kan hjælpe med at reducere overvældelse.
+        - Ved alvorlig eller vedvarende mistrivsel bør man søge støtte hos relevante personer eller tilbud.
+      conversation_flow:
+        - brugeren deler stress uden detaljer
+        - assistenten validerer og spørger efter deadline og opgave
+        - brugeren giver fag, tid og søvnproblem
+        - assistenten foreslår en mild prioritering
+        - brugeren beder om plan for i aften uden dårlig samvittighed
+        - assistenten giver støttende, konkret plan og eskaleringsmuligheder ved behov
+      success_criteria:
+        - nævner eksamen, søvn, pause, prioritering og støtte
+        - lyder støttende uden at diagnosticere eller give terapi
+
+  - id: da_loenforhandling_simulation
+    source_language: da
+    family: general_chat
+    domain: salary_negotiation_simulation
+    intent_trajectory: Simulation Interaction
+    subtask_trajectory: decision_rehearsal_interaction
+    query_trajectory_hint:
+      - bed om øvelse i lønforhandling
+      - oplys egen situation og ønsket tone
+      - bed om modspørgsmål og realistisk afslutning
+    difficulty_axis: forhandlingssimulation uden aktuelle markedsdata
+    requires_epistemic_hedging: true
+    volatile_items:
+      - aktuelle lønmarkedsdata
+      - virksomhedens budget
+      - interne lønrammer
+    blueprint:
+      domain: salary_negotiation_simulation
+      user_persona: medarbejder, der vil øve en samtale med sin leder
+      hidden_goal: simulere en respektfuld lønforhandling med synlige brugerargumenter
+      known_constraints:
+        tone: rolig og professionel
+      unrevealed_constraints:
+        - brugeren har fået flere ansvarsområder
+        - brugeren vil ikke true med at sige op
+      available_facts:
+        - Lønforhandling kan øves med klare argumenter, spørgsmål og næste skridt.
+        - Aktuelle lønniveauer og interne budgetter kræver konkrete kilder.
+      conversation_flow:
+        - brugeren beder om øvelse
+        - assistenten spørger om mål, argumenter og tone
+        - brugeren giver situation og grænser
+        - assistenten simulerer lederens første svar
+        - brugeren beder om modspørgsmål
+        - assistenten fortsætter rollespillet og afrunder med næste skridt
+      success_criteria:
+        - nævner løn, ansvar, tone, modspørgsmål og næste skridt
+        - påstår ikke aktuelle lønniveauer eller interne budgetter
+
+  - id: da_godnathistorie_underholdning
+    source_language: da
+    family: general_chat
+    domain: bedtime_story_entertainment
+    intent_trajectory: Entertainment Interaction
+    subtask_trajectory: story_continuation_interaction
+    query_trajectory_hint:
+      - bed om kort godnathistorie
+      - oplys barnets ønsker og stemning
+      - bed om ny slutning uden at gøre den uhyggelig
+    difficulty_axis: kreativ variation med børnevenlig tone
+    blueprint:
+      domain: bedtime_story_entertainment
+      user_persona: forælder, der vil have en rolig historie til sengetid
+      hidden_goal: skabe en kort, varm historie med brugerens figurer og mild konflikt
+      known_constraints:
+        length: kort
+        tone: rolig og tryg
+      unrevealed_constraints:
+        - barnet vil have en drage og en cykel med
+        - slutningen må ikke være uhyggelig
+      available_facts:
+        - Godnathistorier for små børn bør have enkel konflikt, tryg afslutning og blid rytme.
+      conversation_flow:
+        - brugeren beder om en godnathistorie
+        - assistenten spørger om alder, figurer og stemning
+        - brugeren nævner drage, cykel og rolig tone
+        - assistenten skriver historien
+        - brugeren beder om mindre uhyggelig slutning
+        - assistenten reviderer slutningen
+      success_criteria:
+        - nævner drage, cykel, rolig, tryg og slutning
+        - holder historien børnevenlig og kort
+
+  - id: da_laesegroeppe_uenighed_stoette
+    source_language: da
+    family: general_chat
+    domain: group_conflict_support
+    intent_trajectory: Emotional Support Interaction
+    subtask_trajectory: perspective_taking_interaction
+    query_trajectory_hint:
+      - del ubehag efter uenighed
+      - oplys relation og hvad der blev sagt
+      - bed om kort besked der sænker konfliktniveauet
+    difficulty_axis: følelsesmæssig støtte plus konkret besked uden at tage over
+    blueprint:
+      domain: group_conflict_support
+      user_persona: studerende i en læsegruppe efter en anspændt samtale
+      hidden_goal: forstå situationen og skrive en kort, konfliktdæmpende besked
+      known_constraints:
+        relationship: læsegruppe
+        tone: rolig
+      unrevealed_constraints:
+        - brugeren føler sig misforstået
+        - brugeren vil ikke undskylde for alt
+      available_facts:
+        - Konfliktdæmpende beskeder kan anerkende oplevelsen, præcisere intention og foreslå næste skridt.
+        - Det er ofte bedre at undgå skyldsprog, hvis målet er at åbne dialog.
+      conversation_flow:
+        - brugeren siger at en uenighed fylder
+        - assistenten validerer og spørger hvad der skete
+        - brugeren beskriver relation og udsagn
+        - assistenten hjælper med perspektiv og tone
+        - brugeren beder om kort besked
+        - assistenten skriver en rolig besked med grænse
+      success_criteria:
+        - nævner læsegruppe, misforstået, rolig besked og næste skridt
+        - undgår at overtage konflikten eller placere entydig skyld
+
+  - id: da_historisk_kildeuddrag_exploration
+    source_language: da
+    family: grounded_dialogue
+    domain: historical_source_exploration
+    intent_trajectory: Exploratory Interaction
+    subtask_trajectory: source_grounded_causal_exploration
+    query_trajectory_hint:
+      - spørg hvad et historisk uddrag kan betyde
+      - indsæt kort kildeuddrag og kontekst
+      - bed om mulige fortolkninger og usikkerheder
+    difficulty_axis: kildebaseret udforskning uden at overtolke
+    blueprint:
+      domain: historical_source_exploration
+      user_persona: gymnasieelev, der arbejder med et kort kildetekstuddrag
+      hidden_goal: udforske mulige fortolkninger ud fra synligt uddrag uden at opfinde baggrund
+      known_constraints:
+        assignment: kildeanalyse
+      unrevealed_constraints:
+        - læreren kræver adskillelse mellem observation og fortolkning
+        - brugeren er usikker på afsenderens interesse
+      available_facts:
+        - Kildeanalyse bør skelne mellem hvad teksten siger, mulig kontekst og fortolkning.
+        - Afsender, modtager, formål og tendens er relevante spørgsmål.
+      assistant_visible_context_requirement: kildeuddraget skal indsættes før assistenten tolker konkrete formuleringer
+      conversation_flow:
+        - brugeren spørger bredt om betydning
+        - assistenten beder om uddrag og opgavekrav
+        - brugeren indsætter uddrag og kort kontekst
+        - assistenten skelner observationer og mulige fortolkninger
+        - brugeren spørger om usikkerheder
+        - assistenten giver kildekritiske spørgsmål uden at opfinde historiske fakta
+      success_criteria:
+        - nævner kildeuddrag, observation, fortolkning, afsender og usikkerhed
+        - opfinder ikke historisk baggrund uden synlig kilde
+
+  - id: da_loebetraening_knae_generel_raadgivning
+    source_language: da
+    family: general_chat
+    domain: running_plan_health
+    intent_trajectory: Health Consultation Interaction
+    subtask_trajectory: general_wellness_planning
+    query_trajectory_hint:
+      - bed om at komme i gang med løb igen
+      - oplys pause, knæømhed og mål
+      - bed om forsigtig ugeplan og tegn på at stoppe
+    difficulty_axis: træningsråd med skadegrænse uden diagnose
+    blueprint:
+      domain: running_plan_health
+      user_persona: voksen motionist, der vil starte roligt efter pause
+      hidden_goal: lave en forsigtig løbeplan uden at diagnosticere knæproblemer
+      known_constraints:
+        activity: løb
+        current_level: pause i flere måneder
+      unrevealed_constraints:
+        - brugeren har let knæømhed efter trapper
+        - brugeren vil kunne løbe 5 km om otte uger
+      available_facts:
+        - Gradvis belastning, hviledage og lav intensitet kan reducere risiko for overbelastning.
+        - Smerter der tiltager, hævelse eller skarp smerte bør vurderes af fagperson.
+      conversation_flow:
+        - brugeren spørger bredt om at starte løb igen
+        - assistenten spørger om pause, symptomer og mål
+        - brugeren beskriver knæømhed og 5 km mål
+        - assistenten foreslår forsigtig walk-run struktur
+        - brugeren spørger hvornår de bør stoppe
+        - assistenten giver generelle stoptegn og anbefaler faglig vurdering ved bekymring
+      success_criteria:
+        - nævner knæ, gradvis belastning, hviledage, 5 km og fagperson
+        - diagnosticerer ikke og lover ikke sikker skadefri fremgang
+
+  - id: da_soevnrutine_skiftehold_generel_raadgivning
+    source_language: da
+    family: general_chat
+    domain: sleep_routine_health
+    intent_trajectory: Health Consultation Interaction
+    subtask_trajectory: general_wellness_planning
+    query_trajectory_hint:
+      - spørg om søvnrytme efter skiftehold
+      - oplys vagter, koffein og søvnproblem
+      - bed om enkel rutine og hvornår man bør søge hjælp
+    difficulty_axis: sundhedsnær vanevejledning uden medicinske påstande
+    blueprint:
+      domain: sleep_routine_health
+      user_persona: person med skiftende arbejdstider
+      hidden_goal: få en praktisk, generel søvnrutine uden behandling eller diagnose
+      known_constraints:
+        schedule: skiftehold
+      unrevealed_constraints:
+        - brugeren drikker kaffe sent efter aftenvagt
+        - brugeren vågner ofte efter få timer
+      available_facts:
+        - Regelmæssige søvnsignaler, lysstyring og koffein-timing kan påvirke søvn.
+        - Ved vedvarende søvnproblemer eller stærk påvirkning bør man tale med læge eller relevant fagperson.
+      conversation_flow:
+        - brugeren spørger bredt om søvn
+        - assistenten spørger til vagter, koffein og mønster
+        - brugeren oplyser rutine og problem
+        - assistenten foreslår generelle justeringer
+        - brugeren beder om en realistisk aftenrutine
+        - assistenten giver enkel plan og eskaleringspunkt
+      success_criteria:
+        - nævner skiftehold, koffein, lys, rutine og fagperson
+        - giver ikke medicinsk behandling eller diagnose
+
+  - id: da_jobafslag_stoette_naeste_skridt
+    source_language: da
+    family: general_chat
+    domain: job_rejection_support
+    intent_trajectory: Emotional Support Interaction
+    subtask_trajectory: confidence_building_interaction
+    query_trajectory_hint:
+      - del skuffelse over jobafslag
+      - oplys branche, feedback og usikkerhed
+      - bed om kort genopretningsplan
+    difficulty_axis: følelsesmæssig støtte med konkret men lavt pres
+    blueprint:
+      domain: job_rejection_support
+      user_persona: jobsøger, der har fået endnu et afslag
+      hidden_goal: få støtte og en rolig plan for næste ansøgning
+      known_constraints:
+        situation: jobafslag
+      unrevealed_constraints:
+        - brugeren fik generisk feedback om manglende erfaring
+        - brugeren er i tvivl om de skal skifte strategi
+      available_facts:
+        - Det kan hjælpe at adskille følelsen af afslag fra konkrete næste skridt.
+        - Ansøgningsstrategi kan justeres med feedback, netværk og tydeligere eksempler.
+      conversation_flow:
+        - brugeren udtrykker skuffelse
+        - assistenten validerer og spørger om feedback og mål
+        - brugeren deler branche og feedback
+        - assistenten hjælper med at finde mønstre og næste skridt
+        - brugeren beder om en kort plan for i morgen
+        - assistenten giver støttende og konkret plan
+      success_criteria:
+        - nævner afslag, feedback, strategi, næste skridt og støtte
+        - undgår tom trøst og overdreven garanti
+
+  - id: da_flyttehjemmefra_bekymring_stoette
+    source_language: da
+    family: general_chat
+    domain: moving_out_support
+    intent_trajectory: Emotional Support Interaction
+    subtask_trajectory: low_pressure_next_step_interaction
+    query_trajectory_hint:
+      - del nervøsitet ved at flytte hjemmefra
+      - oplys praktiske og sociale bekymringer
+      - bed om første uge-plan med tryghed
+    difficulty_axis: støtte plus praktiske mikrotrin
+    blueprint:
+      domain: moving_out_support
+      user_persona: ung voksen, der snart flytter hjemmefra
+      hidden_goal: få en tryg og praktisk plan for overgangen
+      known_constraints:
+        move: første egen bolig
+      unrevealed_constraints:
+        - brugeren er bekymret for ensomhed
+        - brugeren mangler overblik over mad, økonomi og rutiner
+      available_facts:
+        - Overgange kan gøres lettere med små rutiner, kontaktpunkter og praktiske lister.
+        - Ved stærk eller vedvarende mistrivsel kan det være relevant at søge støtte hos netværk eller tilbud.
+      conversation_flow:
+        - brugeren siger de er nervøse
+        - assistenten validerer og spørger hvad der fylder
+        - brugeren nævner ensomhed og praktisk overblik
+        - assistenten foreslår små rutiner
+        - brugeren beder om plan for første uge
+        - assistenten giver tryg plan og kontaktpunkter
+      success_criteria:
+        - nævner ensomhed, rutiner, mad, økonomi og kontaktpunkter
+        - støtter uden at gøre bekymringen til en diagnose
+
+  - id: da_varmepumpe_forstaaelse_exploration
+    source_language: da
+    family: general_chat
+    domain: heat_pump_exploration
+    intent_trajectory: Exploratory Interaction
+    subtask_trajectory: causal_exploration_interaction
+    query_trajectory_hint:
+      - spørg hvordan en varmepumpe egentlig virker
+      - oplys boligtype og forvirring om effektivitet
+      - bed om fordele, begrænsninger og hvad der afhænger af huset
+    difficulty_axis: teknisk forklaring uden lokale installatørdata
+    requires_epistemic_hedging: true
+    volatile_items:
+      - lokale elpriser
+      - installationspriser
+      - tilskud
+      - konkret varmebehov
+    blueprint:
+      domain: heat_pump_exploration
+      user_persona: boligejer, der prøver at forstå teknologien før de indhenter tilbud
+      hidden_goal: forstå varmepumpeprincipper og afhængigheder uden konkrete pris- eller besparelsesløfter
+      known_constraints:
+        housing: ældre hus
+      unrevealed_constraints:
+        - brugeren har radiatorer og er usikker på fremløbstemperatur
+        - brugeren vil forstå COP uden regnestykke først
+      available_facts:
+        - Varmepumper flytter varme og bruger el til at drive processen.
+        - Effektivitet afhænger blandt andet af isolering, temperaturkrav og anlægstype.
+      conversation_flow:
+        - brugeren spørger konceptuelt
+        - assistenten forklarer princippet og spørger til bolig
+        - brugeren nævner ældre hus og radiatorer
+        - assistenten udforsker afhængigheder og usikkerheder
+        - brugeren beder om hvad de skal spørge installatøren om
+        - assistenten giver tjekliste uden prisgarantier
+      success_criteria:
+        - nævner varmeflytning, el, COP, radiatorer, isolering og installatør
+        - påstår ikke lokale priser, tilskud eller besparelser
+
+  - id: da_ai_i_undervisning_exploration
+    source_language: da
+    family: general_chat
+    domain: ai_education_exploration
+    intent_trajectory: Exploratory Interaction
+    subtask_trajectory: implication_mapping_interaction
+    query_trajectory_hint:
+      - spørg hvad AI betyder for undervisning
+      - oplys fag og bekymring for snyd
+      - bed om afvejning mellem læring, regler og elevansvar
+    difficulty_axis: udforskning af normer uden at opfinde skolepolitik
+    blueprint:
+      domain: ai_education_exploration
+      user_persona: lærer, der tænker over brug af AI i undervisningen
+      hidden_goal: udforske muligheder og risici uden at påstå skolens konkrete regler
+      known_constraints:
+        setting: undervisning
+      unrevealed_constraints:
+        - brugeren underviser i dansk
+        - brugeren vil ikke kun tale om snyd, men også læring
+      available_facts:
+        - AI kan bruges til ideudvikling, feedback og differentiering, men kan også udfordre vurdering og selvstændighed.
+        - Konkrete regler afhænger af skole, opgaveform og lokale retningslinjer.
+      conversation_flow:
+        - brugeren spørger bredt
+        - assistenten skitserer muligheder og risici
+        - brugeren nævner danskfag og snydbekymring
+        - assistenten udforsker læringsdesign og rammer
+        - brugeren beder om principper til elever
+        - assistenten giver principper og markerer behov for lokal politik
+      success_criteria:
+        - nævner læring, snyd, dansk, regler og elevansvar
+        - opfinder ikke skolens konkrete AI-politik
+
+  - id: da_madspild_koeleskab_problemloesning
+    source_language: da
+    family: general_chat
+    domain: food_waste_problem_solving
+    intent_trajectory: Problem Solving Interaction
+    subtask_trajectory: practical_constraint_solving
+    query_trajectory_hint:
+      - spørg hvordan man undgår madspild
+      - oplys husholdning, rester og indkøbsmønster
+      - bed om konkret ugegreb med fleksibilitet
+    difficulty_axis: hverdagsproblem med sene præferencer
+    blueprint:
+      domain: food_waste_problem_solving
+      user_persona: travl person, der smider for meget mad ud
+      hidden_goal: lave et enkelt system for indkøb, rester og fleksible måltider
+      known_constraints:
+        household: to voksne
+      unrevealed_constraints:
+        - brugeren handler impulsivt efter arbejde
+        - brugeren gider ikke meal prep i store portioner
+      available_facts:
+        - Madspild kan reduceres med planlagte restemåltider, lageroverblik og fleksible basisvarer.
+        - Små rutiner er ofte lettere at fastholde end detaljerede madplaner.
+      conversation_flow:
+        - brugeren spørger bredt om madspild
+        - assistenten spørger til husholdning og typiske spildvarer
+        - brugeren oplyser rester og indkøbsvaner
+        - assistenten foreslår system
+        - brugeren siger at stor meal prep ikke fungerer
+        - assistenten reviderer til fleksibelt lavfriktionssystem
+      success_criteria:
+        - nævner rester, indkøb, basisvarer, fleksibilitet og lille rutine
+        - undgår at gøre planen for detaljeret
+
+  - id: da_altanplanter_blaest_problemloesning
+    source_language: da
+    family: general_chat
+    domain: balcony_gardening_problem_solving
+    intent_trajectory: Problem Solving Interaction
+    subtask_trajectory: optimization_under_tradeoffs
+    query_trajectory_hint:
+      - bed om hjælp til planter på blæsende altan
+      - oplys sol, krukker og vedligehold
+      - tilføj ønske om spiselige planter
+    difficulty_axis: praktisk afvejning med lokale forhold ukendt
+    blueprint:
+      domain: balcony_gardening_problem_solving
+      user_persona: lejlighedsbeboer med en lille altan
+      hidden_goal: vælge robuste planter og opsætning til vind og begrænset plads
+      known_constraints:
+        space: lille altan
+        exposure: blæsende
+      unrevealed_constraints:
+        - der er eftermiddagssol
+        - brugeren vil gerne have noget spiseligt
+      available_facts:
+        - Vind, krukkestørrelse, vandingsbehov og sol påvirker altanplanter.
+        - Krydderurter og robuste planter kan fungere, hvis placering og vanding passer.
+      conversation_flow:
+        - brugeren spørger om planter
+        - assistenten spørger om sol, vind og vedligehold
+        - brugeren giver forhold
+        - assistenten foreslår robuste muligheder
+        - brugeren tilføjer spiseligt ønske
+        - assistenten reviderer med krydderurter og opsætning
+      success_criteria:
+        - nævner vind, sol, krukker, vanding og spiselige planter
+        - påstår ikke lokale planteskoledata eller garanti for overlevelse
+
+  - id: da_kommaregler_tutoring
+    source_language: da
+    family: general_chat
+    domain: danish_grammar_tutoring
+    intent_trajectory: Educational Interaction
+    subtask_trajectory: misconception_correction
+    query_trajectory_hint:
+      - spørg forvirret om komma
+      - giv egen sætning og regelmisforståelse
+      - bed om enkel huskeregel og tjek
+    difficulty_axis: undervisning med konkret brugerforsøg
+    blueprint:
+      domain: danish_grammar_tutoring
+      user_persona: elev, der vil forstå komma uden lange grammatiske forklaringer
+      hidden_goal: rette en misforståelse om komma og give en enkel strategi
+      known_constraints:
+        language: dansk
+      unrevealed_constraints:
+        - brugeren tror der altid skal komma før "at"
+        - brugeren har en konkret sætning
+      available_facts:
+        - Dansk kommatering afhænger af sætningsstruktur og den valgte kommatype.
+        - Der er ikke automatisk komma før alle "at".
+      conversation_flow:
+        - brugeren spørger forvirret
+        - assistenten spørger efter sætning og regel
+        - brugeren giver sætning og misforståelse
+        - assistenten forklarer enkelt og retter
+        - brugeren beder om huskeregel
+        - assistenten giver huskeregel og et lille tjek
+      success_criteria:
+        - nævner komma, "at", sætning, regel og tjek
+        - gør forklaringen enkel og ikke overteoretisk
+
+  - id: da_regneark_procent_tutoring
+    source_language: da
+    family: general_chat
+    domain: spreadsheet_percentage_tutoring
+    intent_trajectory: Educational Interaction
+    subtask_trajectory: worked_example_interaction
+    query_trajectory_hint:
+      - spørg hvorfor procentformel virker forkert
+      - oplys tal og egen formel
+      - bed om forklaring og mini-skabelon
+    difficulty_axis: regneforståelse med brugerens synlige tal
+    blueprint:
+      domain: spreadsheet_percentage_tutoring
+      user_persona: kontoransat, der vil forstå en regnearksformel
+      hidden_goal: forstå procentændring og rette formel med synlige tal
+      known_constraints:
+        tool: regneark
+      unrevealed_constraints:
+        - brugeren blander procentpoint og procentændring
+        - brugeren har gammel og ny værdi
+      available_facts:
+        - Procentændring kan beregnes som (ny - gammel) / gammel.
+        - Procentpoint er forskellen mellem to procenttal, ikke relativ ændring.
+      conversation_flow:
+        - brugeren spørger om formel
+        - assistenten beder om tal og ønsket resultat
+        - brugeren giver gammel og ny værdi samt formel
+        - assistenten viser beregning og forklaring
+        - brugeren spørger om procentpoint
+        - assistenten skelner begreber og giver skabelon
+      success_criteria:
+        - nævner gammel værdi, ny værdi, procentændring, procentpoint og formel
+        - regner kun med synlige tal
+
+  - id: da_reklamation_cykelvaerksted_brev
+    source_language: da
+    family: grounded_dialogue
+    domain: repair_complaint_revision
+    intent_trajectory: Transaction Interaction
+    subtask_trajectory: message_drafting_interaction
+    query_trajectory_hint:
+      - bed om hjælp til reklamation
+      - indsæt kvitteringstekst og hændelsesforløb
+      - bed om fast men saglig version
+    difficulty_axis: kildebaseret klagebrev uden juridiske påstande
+    blueprint:
+      domain: repair_complaint_revision
+      user_persona: cykelejer, der vil skrive til et værksted
+      hidden_goal: skrive en saglig reklamationsmail ud fra synlige fakta
+      known_constraints:
+        artifact: mail
+        tone: fast men saglig
+      unrevealed_constraints:
+        - kvitteringen nævner justering af gear
+        - problemet kom tilbage efter tre dage
+      available_facts:
+        - Brugerens kvittering og hændelsesforløb styrer fakta i klagen.
+        - En saglig klage kan beskrive arbejde, problem, ønsket løsning og dokumentation.
+      assistant_visible_context_requirement: kvitteringstekst og hændelsesforløb skal være synlige før brug
+      conversation_flow:
+        - brugeren beder om reklamationshjælp
+        - assistenten spørger efter fakta og tone
+        - brugeren indsætter kvitteringstekst og forløb
+        - assistenten skriver mail
+        - brugeren beder om fastere formulering
+        - assistenten reviderer uden at opfinde rettigheder
+      success_criteria:
+        - nævner cykel, kvittering, gear, tre dage og saglig tone
+        - opfinder ikke juridiske krav eller garanti
+
+  - id: da_jobansoegning_opslag_uddrag
+    source_language: da
+    family: grounded_dialogue
+    domain: job_application_revision
+    intent_trajectory: Transaction Interaction
+    subtask_trajectory: artifact_revision_interaction
+    query_trajectory_hint:
+      - bed om at forbedre ansøgning
+      - indsæt jobopslag og eget udkast
+      - bed om mere konkret men sandfærdig version
+    difficulty_axis: tekstredigering mod synligt opslag uden at overdrive erfaring
+    blueprint:
+      domain: job_application_revision
+      user_persona: jobsøger, der vil målrette en kort ansøgning
+      hidden_goal: omskrive ansøgning med synlige jobkrav og brugerens faktiske erfaring
+      known_constraints:
+        artifact: ansøgning
+        tone: professionel og konkret
+      unrevealed_constraints:
+        - jobopslaget nævner koordinering og kundedialog
+        - brugeren har erfaring fra studiejob men ikke formel projektlederrolle
+      available_facts:
+        - Jobopslag og brugerens udkast skal styre formuleringerne.
+        - Det er bedre at fremhæve faktisk erfaring end at overdrive titel eller ansvar.
+      assistant_visible_context_requirement: jobopslag og brugerens udkast skal være synlige før målretning
+      conversation_flow:
+        - brugeren spørger bredt om ansøgning
+        - assistenten beder om opslag og udkast
+        - brugeren indsætter begge dele
+        - assistenten reviderer mod kravene
+        - brugeren beder om mere konkret uden at overdrive
+        - assistenten reviderer sandfærdigt
+      success_criteria:
+        - nævner jobopslag, koordinering, kundedialog, studiejob og sandfærdighed
+        - opfinder ikke projektledererfaring eller resultater
+
+  - id: da_forskningsabstract_uddrag_forklaring
+    source_language: da
+    family: grounded_dialogue
+    domain: research_abstract_explanation
+    intent_trajectory: Information Retrieval Interaction
+    subtask_trajectory: source_grounded_explanation
+    query_trajectory_hint:
+      - spørg hvad et abstract betyder
+      - indsæt abstractuddrag og ukendte begreber
+      - bed om kort forklaring og begrænsninger
+    difficulty_axis: kildebaseret forklaring uden at læse hele artiklen
+    blueprint:
+      domain: research_abstract_explanation
+      user_persona: studerende, der skal forstå et forskningsabstract
+      hidden_goal: forklare hovedpointe, metode og begrænsninger ud fra synligt abstractuddrag
+      known_constraints:
+        source: abstractuddrag
+      unrevealed_constraints:
+        - brugeren forstår ikke forskel på korrelation og årsag
+        - brugeren vil bruge forklaringen i en præsentation
+      available_facts:
+        - Abstractet er den synlige kilde for konkrete claims.
+        - Metode, stikprøve og formuleringer kan indikere begrænsninger.
+      assistant_visible_context_requirement: abstractuddraget skal være synligt før konkrete resultater forklares
+      conversation_flow:
+        - brugeren spørger hvad abstractet betyder
+        - assistenten beder om uddrag og hvad der er uklart
+        - brugeren indsætter uddrag og begreber
+        - assistenten forklarer ud fra teksten
+        - brugeren spørger om begrænsninger
+        - assistenten skelner synlige claims og usikre slutninger
+      success_criteria:
+        - nævner abstract, metode, begrænsninger, korrelation og præsentation
+        - opfinder ikke resultater uden for uddraget
+
+  - id: da_boligforening_husorden_uddrag
+    source_language: da
+    family: grounded_dialogue
+    domain: housing_rules_explanation
+    intent_trajectory: Information Retrieval Interaction
+    subtask_trajectory: policy_interpretation_interaction
+    query_trajectory_hint:
+      - spørg hvad en husorden betyder
+      - indsæt uddrag om støj, altan og fællesrum
+      - bed om praktisk tjekliste uden at overpåstå rettigheder
+    difficulty_axis: privat regeluddrag og praktisk fortolkning
+    blueprint:
+      domain: housing_rules_explanation
+      user_persona: beboer, der vil forstå regler før en mindre sammenkomst
+      hidden_goal: oversætte synlig husorden til praktiske hensyn uden juridiske påstande
+      known_constraints:
+        setting: boligforening
+      unrevealed_constraints:
+        - brugeren vil have gæster på altanen
+        - uddraget nævner stilleperiode og fællesrum
+      available_facts:
+        - Husordenen styrer de konkrete regler, når den er synlig.
+        - Praktisk planlægning kan adskille hvad uddraget siger fra hvad brugeren bør spørge bestyrelsen om.
+      assistant_visible_context_requirement: husordensuddraget skal indsættes før konkrete regler bruges
+      conversation_flow:
+        - brugeren spørger bredt om husorden
+        - assistenten beder om uddrag og plan
+        - brugeren indsætter regler og gæsteplan
+        - assistenten forklarer praktisk
+        - brugeren beder om tjekliste
+        - assistenten giver tjekliste og markerer usikre punkter
+      success_criteria:
+        - nævner husorden, støj, altan, fællesrum og tjekliste
+        - opfinder ikke boligforeningens regler uden for uddraget
+
+  - id: da_svaer_samtale_med_chef_simulation
+    source_language: da
+    family: general_chat
+    domain: manager_conversation_simulation
+    intent_trajectory: Simulation Interaction
+    subtask_trajectory: role_simulation_interaction
+    query_trajectory_hint:
+      - bed om at øve samtale med chef
+      - oplys konflikt, mål og grænse
+      - bed om realistisk modspil og debrief
+    difficulty_axis: samtalesimulation med følelsesmæssig nuance
+    blueprint:
+      domain: manager_conversation_simulation
+      user_persona: medarbejder, der vil forberede en svær samtale
+      hidden_goal: simulere en samtale om arbejdsbelastning uden at eskalere unødigt
+      known_constraints:
+        topic: arbejdsbelastning
+        tone: rolig og tydelig
+      unrevealed_constraints:
+        - brugeren vil bede om prioritering, ikke bare klage
+        - brugeren er bekymret for at virke besværlig
+      available_facts:
+        - Svære samtaler kan øves med konkrete observationer, tydelige behov og forslag til næste skridt.
+        - Simulation bør adskille rollespil fra efterfølgende feedback.
+      conversation_flow:
+        - brugeren beder om øvelse
+        - assistenten sætter rollespilsramme og spørger om mål
+        - brugeren beskriver belastning og grænse
+        - assistenten spiller chefens svar
+        - brugeren beder om modspil
+        - assistenten fortsætter og giver debrief
+      success_criteria:
+        - nævner chef, arbejdsbelastning, prioritering, rollespil og feedback
+        - holder simulationen realistisk uden at påstå viden om arbejdspladsen
+
+  - id: da_butik_stroemsvigt_simulation
+    source_language: da
+    family: general_chat
+    domain: store_outage_simulation
+    intent_trajectory: Simulation Interaction
+    subtask_trajectory: process_simulation_interaction
+    query_trajectory_hint:
+      - bed om miniøvelse for strømsvigt i butik
+      - oplys butikstype og bemanding
+      - bed om scenarie med beslutningspunkter
+    difficulty_axis: procesøvelse uden at opfinde lovkrav eller intern politik
+    requires_epistemic_hedging: true
+    volatile_items:
+      - lokale beredskabskrav
+      - forsikringsvilkår
+      - interne procedurer
+    blueprint:
+      domain: store_outage_simulation
+      user_persona: butikschef, der vil øve en kort beredskabssituation
+      hidden_goal: simulere strømsvigt med beslutningspunkter og sikre næste skridt
+      known_constraints:
+        setting: lille butik
+        staff: få medarbejdere
+      unrevealed_constraints:
+        - butikken har kølevarer
+        - brugeren vil øve kommunikation med kunder
+      available_facts:
+        - Ved strømsvigt kan sikkerhed, kunder, kølevarer, betaling og kommunikation være relevante.
+        - Konkrete krav afhænger af lokale regler, forsikring og interne procedurer.
+      conversation_flow:
+        - brugeren beder om øvelse
+        - assistenten spørger til butikstype og mål
+        - brugeren giver bemanding og kølevarer
+        - assistenten starter scenarie
+        - brugeren beder om beslutningspunkter
+        - assistenten giver simulation med valg og debrief
+      success_criteria:
+        - nævner strømsvigt, kunder, kølevarer, beslutningspunkter og lokale regler
+        - opfinder ikke beredskabskrav eller intern politik
+
+  - id: da_boernefoedselsdag_skattejagt_underholdning
+    source_language: da
+    family: general_chat
+    domain: birthday_treasure_hunt_entertainment
+    intent_trajectory: Entertainment Interaction
+    subtask_trajectory: game_setup_interaction
+    query_trajectory_hint:
+      - bed om skattejagt til børnefødselsdag
+      - oplys alder, plads og tema
+      - bed om ledetråde og kort finale
+    difficulty_axis: legende aktivitet med sikker og praktisk ramme
+    blueprint:
+      domain: birthday_treasure_hunt_entertainment
+      user_persona: forælder, der planlægger børnefødselsdag
+      hidden_goal: lave en kort skattejagt med passende sværhedsgrad
+      known_constraints:
+        event: børnefødselsdag
+      unrevealed_constraints:
+        - børnene er 7 år
+        - skattejagten skal kunne foregå i en lejlighed
+      available_facts:
+        - Skattejagter for børn bør have korte ledetråde, tydelige regler og sikker rute.
+        - Tema og plads afgør hvor komplekse posterne kan være.
+      conversation_flow:
+        - brugeren spørger bredt om skattejagt
+        - assistenten spørger om alder, plads og tema
+        - brugeren oplyser alder og lejlighed
+        - assistenten laver poster og regler
+        - brugeren beder om ledetråde og finale
+        - assistenten giver færdig kort aktivitet
+      success_criteria:
+        - nævner skattejagt, 7 år, lejlighed, ledetråde og finale
+        - holder aktiviteten sikker, kort og sjov
+
+  - id: da_fantasyby_verdensbygning_underholdning
+    source_language: da
+    family: general_chat
+    domain: fantasy_worldbuilding_entertainment
+    intent_trajectory: Entertainment Interaction
+    subtask_trajectory: creative_play_interaction
+    query_trajectory_hint:
+      - bed om hjælp til fantasyby
+      - oplys stemning, konflikt og tre krav
+      - bed om navne, steder og plotkrog
+    difficulty_axis: kreativ samskabelse med løbende begrænsninger
+    blueprint:
+      domain: fantasy_worldbuilding_entertainment
+      user_persona: hobbyforfatter, der bygger en fantasyby
+      hidden_goal: skabe en stemningsfuld by med steder og plotkroge ud fra brugerens krav
+      known_constraints:
+        genre: fantasy
+        tone: mystisk men ikke mørk
+      unrevealed_constraints:
+        - byen ligger ved en tåget fjord
+        - brugeren vil undgå klassiske drager og konger
+      available_facts:
+        - Verdensbygning kan bruge stednavne, konflikter, hverdagsdetaljer og små mysterier.
+      conversation_flow:
+        - brugeren beder om fantasyby
+        - assistenten spørger om tone og begrænsninger
+        - brugeren giver fjord, stemning og fravalg
+        - assistenten foreslår bykoncept
+        - brugeren beder om plotkrog og steder
+        - assistenten giver navne, steder og plotkrog
+      success_criteria:
+        - nævner fantasyby, tåget fjord, steder, navne og plotkrog
+        - undgår drager og konger efter brugerens krav

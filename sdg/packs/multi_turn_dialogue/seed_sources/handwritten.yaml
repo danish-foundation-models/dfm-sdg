@@ -1,0 +1,891 @@
+version: 1
+seeds:
+  - id: travel_lisbon_family_estimate
+    family: general_chat
+    domain: travel_planning
+    intent_trajectory: planning_interaction
+    query_trajectory_hint:
+      - vague trip request
+      - reveal budget and children ages
+      - add allergy and flight-time constraints
+    difficulty_axis: volatile budget estimate plus late safety constraint
+    requires_epistemic_hedging: true
+    volatile_items:
+      - current flight prices
+      - real flight schedules
+      - hotel inventory
+      - restaurant availability
+      - booking status
+    blueprint:
+      domain: travel_planning
+      user_persona: busy parent planning a short trip with two children
+      hidden_goal: plan a 4-day low-cost Lisbon itinerary without pretending to know live prices
+      known_constraints:
+        budget: "$1800 total"
+        children_ages: [6, 10]
+      unrevealed_constraints:
+        - one child has a peanut allergy
+        - avoid late-night flights
+      available_facts:
+        - Lisbon has walkable central neighborhoods and family-friendly museums.
+        - Traditional desserts and sauces may carry nut or cross-contact risk.
+      conversation_flow:
+        - vague initial request
+        - assistant asks clarifying question
+        - user reveals budget and children ages
+        - assistant offers an illustrative plan and asks for real quotes before confirming feasibility
+        - user adds allergy and flight-time constraints
+        - assistant revises with allergy precautions and live-data humility
+      success_criteria:
+        - mentions Lisbon, $1800, peanut, and daytime
+        - treats prices, flights, lodging, and restaurant availability as unknown without live data
+        - offers to recompute once real quotes are supplied
+
+  - id: home_network_vpn_recovery
+    family: general_chat
+    domain: home_network_troubleshooting
+    intent_trajectory: troubleshooting_interaction
+    query_trajectory_hint:
+      - urgent vague symptom
+      - reveal device isolation
+      - reveal recent VPN clue
+    difficulty_axis: wrong-assumption recovery under time pressure
+    blueprint:
+      domain: home_network_troubleshooting
+      user_persona: remote worker with a time-sensitive video call
+      hidden_goal: restore laptop internet access before a call
+      known_constraints:
+        device: laptop
+        deadline: 30 minutes
+      unrevealed_constraints:
+        - phone Wi-Fi works
+        - laptop recently used a VPN
+      available_facts:
+        - If one device fails while others work, device configuration is more likely than router failure.
+        - VPN clients and DNS settings can make Wi-Fi appear connected but unusable.
+      conversation_flow:
+        - vague Wi-Fi failure
+        - assistant asks whether all devices are affected
+        - user says phone works
+        - assistant narrows to laptop checks
+        - user reveals VPN clue
+        - assistant revises toward VPN and DNS recovery
+      success_criteria:
+        - does not recommend replacing the router
+        - uses phone-versus-laptop contrast
+        - mentions VPN and 30 minutes
+
+  - id: policy_reimbursement_visible_excerpt
+    family: grounded_dialogue
+    domain: policy_grounded_reimbursement
+    intent_trajectory: educational_interaction
+    query_trajectory_hint:
+      - ask reimbursement question with visible policy excerpt
+      - disclose expense details and receipts
+      - reveal breakfast was included in lodging
+    difficulty_axis: private policy facts plus late no-double-claim constraint
+    blueprint:
+      domain: policy_grounded_reimbursement
+      user_persona: employee submitting an expense report after a short trip
+      hidden_goal: determine which travel expenses can be reimbursed from a visible policy excerpt
+      known_constraints:
+        trip: one-night client visit
+        receipt_status: some receipts missing
+      unrevealed_constraints:
+        - hotel breakfast was included
+        - taxi receipt is missing
+      available_facts:
+        - Meals are reimbursable up to $65 per day when itemized receipts are attached.
+        - A taxi can be reimbursed without a receipt only when the amount is under $25 and the route is documented.
+        - Meals included in lodging cannot be claimed again as a separate meal expense.
+      assistant_visible_context_requirement: user must paste the relevant policy excerpt before the assistant uses policy thresholds
+      conversation_flow:
+        - user asks vague reimbursement question and pastes policy excerpt
+        - assistant asks for amounts, categories, and receipts
+        - user reveals meal, taxi, and lodging details
+        - assistant applies only the visible policy
+        - user reveals breakfast was included
+        - assistant revises and runs the arithmetic
+      success_criteria:
+        - does not claim company policy unless it was visible first
+        - excludes breakfast after late disclosure
+        - computes eligible claim from user-provided amounts
+
+  - id: proposal_revision_funder_update
+    family: grounded_dialogue
+    domain: proposal_revision
+    intent_trajectory: refinement_interaction
+    query_trajectory_hint:
+      - rough edit request
+      - disclose funder audience and source facts
+      - add no-overclaim and ordering constraint
+    difficulty_axis: grounded revision without overclaiming
+    blueprint:
+      domain: proposal_revision
+      user_persona: nonprofit program lead preparing a short grant update
+      hidden_goal: turn a rough update into a factual funder-ready paragraph
+      known_constraints:
+        tone: plain and credible
+        length: short paragraph
+      unrevealed_constraints:
+        - avoid promising outcomes not yet measured
+        - mention rural clinics before staff count
+      available_facts:
+        - Three rural clinics started using the intake checklist.
+        - The pilot trained 18 clinic staff.
+        - Outcome data will be reviewed next quarter.
+      assistant_visible_context_requirement: source facts must be stated by the user before the assistant uses them
+      conversation_flow:
+        - rough editing request
+        - assistant asks audience and proof level
+        - user reveals funder audience and source facts
+        - assistant drafts a paragraph
+        - user adds ordering and caution constraints
+        - assistant revises with grounded claims only
+      success_criteria:
+        - mentions three rural clinics before 18 clinic staff
+        - says outcome data is pending next quarter
+        - avoids claiming measured impact
+
+  - id: tutoring_confidence_interval
+    family: general_chat
+    domain: statistics_tutoring
+    intent_trajectory: educational_interaction
+    query_trajectory_hint:
+      - confused homework question
+      - reveal attempted calculation
+      - ask for intuition and final check
+    difficulty_axis: misconception correction
+    blueprint:
+      domain: statistics_tutoring
+      user_persona: college student preparing homework
+      hidden_goal: understand a confidence interval without copying an answer blindly
+      known_constraints:
+        level: introductory statistics
+      unrevealed_constraints:
+        - user confuses confidence level with probability the fixed interval contains the mean
+        - user has an attempted calculation
+      available_facts:
+        - A 95% confidence interval procedure captures the true mean in 95% of repeated samples under assumptions.
+        - Standard error reflects sampling variability of the sample mean.
+      conversation_flow:
+        - vague confusion
+        - assistant asks for problem statement and attempt
+        - user gives sample mean and attempted formula
+        - assistant corrects method and misconception
+        - user asks for plain-English interpretation
+        - assistant gives concise interpretation and check
+      success_criteria:
+        - mentions 95%, standard error, sample mean, and interpretation
+        - corrects the misconception without overcomplicating
+
+  - id: laptop_purchase_current_specs_unknown
+    family: general_chat
+    domain: product_comparison
+    intent_trajectory: comparison_interaction
+    query_trajectory_hint:
+      - broad purchase question
+      - reveal workflow and budget
+      - ask to compare two named options without live specs
+    difficulty_axis: current product data boundary
+    requires_epistemic_hedging: true
+    volatile_items:
+      - current prices
+      - current specs
+      - discounts
+      - stock availability
+      - model revisions
+    blueprint:
+      domain: product_comparison
+      user_persona: graduate student buying a laptop
+      hidden_goal: choose a laptop based on workflow and budget without pretending to know current listings
+      known_constraints:
+        budget: "$1200"
+        workflow: writing, browser tabs, light coding, occasional photo editing
+      unrevealed_constraints:
+        - prioritizes battery life over gaming
+        - asks about two current retail listings not shown in the conversation
+      available_facts:
+        - More RAM helps with many browser tabs and development tools.
+        - Battery life and weight matter for campus use.
+      conversation_flow:
+        - broad purchase question
+        - assistant asks workflow and budget
+        - user gives workflow and budget
+        - assistant explains evaluation criteria
+        - user names two options without specs
+        - assistant asks for current specs or gives a comparison rubric
+      success_criteria:
+        - does not invent current prices or model specs
+        - mentions battery, RAM, budget, and current specs
+
+  - id: meal_plan_diabetes_general_advice
+    family: general_chat
+    domain: meal_planning
+    intent_trajectory: advisory_interaction
+    query_trajectory_hint:
+      - broad meal planning request
+      - reveal dietary constraints and schedule
+      - add preference change
+    difficulty_axis: health-adjacent general advice boundary
+    blueprint:
+      domain: meal_planning
+      user_persona: busy adult planning weekday meals
+      hidden_goal: make a practical meal-prep plan with general diabetes-aware guidance
+      known_constraints:
+        meals: weekday lunches
+        time_limit: 90 minutes on Sunday
+      unrevealed_constraints:
+        - wants diabetes-aware meals but not medical dosing advice
+        - dislikes fish
+      available_facts:
+        - Balanced meals often include fiber-rich carbs, protein, and non-starchy vegetables.
+        - Medical nutrition needs can vary by person and medication.
+      conversation_flow:
+        - vague meal-prep request
+        - assistant asks dietary constraints and time
+        - user reveals diabetes-aware goal and schedule
+        - assistant gives general meal-prep options
+        - user adds dislike of fish
+        - assistant revises and suggests clinician-specific follow-up
+      success_criteria:
+        - mentions carbs, protein, meal prep, and clinician
+        - keeps advice general and avoids medical dosing claims
+
+  - id: rental_deposit_email_with_lease_excerpt
+    family: grounded_dialogue
+    domain: tenant_email_revision
+    intent_trajectory: refinement_interaction
+    query_trajectory_hint:
+      - rough complaint
+      - provide lease excerpt and facts
+      - ask for firmer but polite revision
+    difficulty_axis: private lease/source facts plus tone revision
+    blueprint:
+      domain: tenant_email_revision
+      user_persona: tenant writing to a landlord
+      hidden_goal: draft a polite but firm email asking about a delayed deposit return
+      known_constraints:
+        tone: polite and firm
+      unrevealed_constraints:
+        - lease excerpt says deposit update should arrive within 14 days
+        - move-out walkthrough had no noted damage
+      available_facts:
+        - Lease excerpt says deposit update is due within 14 days of move-out.
+        - Walkthrough notes did not list damage.
+      assistant_visible_context_requirement: lease and walkthrough facts must be provided by the user before use
+      conversation_flow:
+        - user asks for help with a rough complaint
+        - assistant asks for facts and tone
+        - user provides lease excerpt and walkthrough fact
+        - assistant drafts email
+        - user asks for firmer version
+        - assistant revises while staying polite
+      success_criteria:
+        - mentions deposit, 14 days, walkthrough, and polite
+        - avoids inventing tenant law or legal deadlines beyond the excerpt
+
+  - id: parental_leave_policy_visible_excerpt
+    family: grounded_dialogue
+    domain: hr_policy_parental_leave
+    intent_trajectory: educational_interaction
+    query_trajectory_hint:
+      - vague leave eligibility question with policy excerpt
+      - reveal tenure and dates
+      - add part-time return constraint
+    difficulty_axis: private HR policy plus late schedule constraint
+    blueprint:
+      domain: hr_policy_parental_leave
+      user_persona: employee planning parental leave
+      hidden_goal: understand leave eligibility from a pasted HR policy excerpt
+      known_constraints:
+        tenure: not initially revealed
+        desired_leave: parental leave
+      unrevealed_constraints:
+        - user has worked at the company for 8 months
+        - user wants to return part-time for the first month
+      available_facts:
+        - Policy excerpt grants 12 weeks of parental leave after 6 months of employment.
+        - Part-time return requires manager and HR approval.
+      assistant_visible_context_requirement: HR thresholds and approval requirements must be visible before use
+      conversation_flow:
+        - user asks if they qualify and pastes policy excerpt
+        - assistant asks tenure and target dates
+        - user reveals tenure and leave window
+        - assistant applies policy excerpt
+        - user asks about part-time return
+        - assistant revises with HR approval caveat
+      success_criteria:
+        - mentions 12 weeks, 6 months, part-time, and HR
+        - does not invent employment-law rights beyond the pasted policy
+
+  - id: refund_policy_current_unknown
+    family: grounded_dialogue
+    domain: shopping_return_policy
+    intent_trajectory: transactional_interaction
+    query_trajectory_hint:
+      - broad return question
+      - provide receipt date and policy excerpt
+      - reveal opened-box condition
+    difficulty_axis: private retailer policy and current policy boundary
+    blueprint:
+      domain: shopping_return_policy
+      user_persona: customer trying to return a device
+      hidden_goal: decide whether a return is likely under a user-provided policy excerpt
+      known_constraints:
+        product: headphones
+        purchase_channel: store
+      unrevealed_constraints:
+        - box was opened
+        - receipt exists
+      available_facts:
+        - Return policy excerpt says most items can be returned within 30 days with receipt.
+        - Opened electronics may receive store credit instead of refund.
+      assistant_visible_context_requirement: retailer policy must be pasted before the assistant uses the terms
+      conversation_flow:
+        - user asks if they can return an item
+        - assistant asks for date, receipt, condition, and policy if available
+        - user gives policy excerpt and purchase date
+        - assistant gives conditional guidance
+        - user reveals the box was opened
+        - assistant revises and suggests bringing receipt to store
+      success_criteria:
+        - mentions 30 days, receipt, opened, and store
+        - does not claim current retailer policy without a visible excerpt
+
+  - id: side_income_tax_estimate_boundary
+    family: general_chat
+    domain: tax_planning
+    intent_trajectory: advisory_interaction
+    query_trajectory_hint:
+      - broad tax question
+      - reveal side-income amount and location
+      - ask for payment planning rather than exact filing advice
+    difficulty_axis: finance-adjacent current tax-law boundary
+    requires_epistemic_hedging: true
+    volatile_items:
+      - current tax rates
+      - state tax rules
+      - deductions
+      - filing deadlines
+      - penalty thresholds
+    blueprint:
+      domain: tax_planning
+      user_persona: freelancer with new side income
+      hidden_goal: make a conservative planning estimate without pretending to know current tax law
+      known_constraints:
+        income_type: freelance side income
+      unrevealed_constraints:
+        - user is in a specific state
+        - wants help setting aside money each month
+      available_facts:
+        - Tax planning often requires income, jurisdiction, deductions, and filing status.
+        - Keeping records helps estimate taxable income and payments.
+      conversation_flow:
+        - vague side-income tax question
+        - assistant asks location, amount, filing status, and whether user wants a rough estimate
+        - user gives income and location
+        - assistant frames a non-authoritative estimate and recordkeeping plan
+        - user asks whether quarterly payments are needed
+        - assistant explains uncertainty and recommends checking official guidance or a tax professional
+      success_criteria:
+        - mentions estimate, quarterly, records, and tax professional
+        - avoids asserting exact current tax rates or deadlines
+
+  - id: debt_payoff_cashflow_plan
+    family: general_chat
+    domain: personal_finance_budgeting
+    intent_trajectory: planning_interaction
+    query_trajectory_hint:
+      - vague debt stress question
+      - reveal balances and monthly surplus
+      - add emergency-fund constraint
+    difficulty_axis: arithmetic planning with late safety preference
+    blueprint:
+      domain: personal_finance_budgeting
+      user_persona: person trying to reduce credit-card debt
+      hidden_goal: choose a payoff plan based on user-provided balances and cashflow
+      known_constraints:
+        monthly_extra: "$300"
+      unrevealed_constraints:
+        - user wants to keep a small emergency fund
+        - one card has a much higher APR
+      available_facts:
+        - Debt avalanche prioritizes higher-interest debt after paying minimums.
+        - A small emergency buffer can reduce risk of new debt.
+      conversation_flow:
+        - vague debt payoff request
+        - assistant asks balances, rates, minimums, and monthly surplus
+        - user provides balances and $300 extra
+        - assistant proposes avalanche plan
+        - user adds emergency-fund concern
+        - assistant revises to preserve buffer while paying minimums
+      success_criteria:
+        - mentions minimums, emergency fund, $300, and avalanche
+        - uses only user-provided balances and rates for arithmetic
+
+  - id: medication_side_effect_general_boundary
+    family: general_chat
+    domain: medication_advice
+    intent_trajectory: advisory_interaction
+    query_trajectory_hint:
+      - vague medication concern
+      - reveal symptom timing and medication name
+      - add red-flag symptom denial and ask what to do next
+    difficulty_axis: health-adjacent general advice without diagnosis
+    blueprint:
+      domain: medication_advice
+      user_persona: patient worried about a new medication
+      hidden_goal: decide safe next steps for a possible side effect
+      known_constraints:
+        medication_started_recently: true
+      unrevealed_constraints:
+        - user has mild nausea but no severe symptoms
+        - user is unsure whether to stop medication
+      available_facts:
+        - Medication side effects and stopping rules depend on the drug and patient history.
+        - Severe allergic symptoms or trouble breathing require urgent care.
+      conversation_flow:
+        - vague concern about feeling off after medication
+        - assistant asks medication, timing, severity, and red flags
+        - user gives name and mild symptoms
+        - assistant gives general safety guidance
+        - user asks whether to stop taking it
+        - assistant recommends contacting pharmacist or prescriber and urgent care for red flags
+      success_criteria:
+        - mentions pharmacist, prescriber, urgent, and side effect
+        - does not diagnose or give individualized stop/start instructions
+
+  - id: small_claims_form_visible_instructions
+    family: grounded_dialogue
+    domain: legal_form_assistance
+    intent_trajectory: transactional_interaction
+    query_trajectory_hint:
+      - ask for help filling a small-claims form
+      - provide form instructions and facts
+      - ask for wording that stays factual
+    difficulty_axis: legal-adjacent form support with source-boundary
+    blueprint:
+      domain: legal_form_assistance
+      user_persona: person preparing a small-claims filing
+      hidden_goal: organize facts for a form without giving legal advice
+      known_constraints:
+        dispute_amount: "$3,200"
+        issue: unpaid repair invoice
+      unrevealed_constraints:
+        - form instructions mention Form SC-100 and a $10,000 limit
+        - user wants factual language only
+      available_facts:
+        - User-provided form instructions name Form SC-100.
+        - User-provided instructions say the court clerk can answer procedural questions.
+      assistant_visible_context_requirement: court-specific form instructions must be pasted before use
+      conversation_flow:
+        - user asks for help with a small-claims form
+        - assistant asks for jurisdiction instructions and facts
+        - user provides form instructions and dispute facts
+        - assistant drafts factual form language
+        - user asks to avoid legal arguments
+        - assistant revises and suggests checking procedural questions with the court clerk
+      success_criteria:
+        - mentions Form SC-100, $3,200, factual, and court clerk
+        - avoids legal conclusions or jurisdiction-specific claims not supplied
+
+  - id: immigration_form_checklist_official_instructions
+    family: grounded_dialogue
+    domain: immigration_form_checklist
+    intent_trajectory: transactional_interaction
+    query_trajectory_hint:
+      - ask what documents are needed
+      - provide official checklist excerpt
+      - reveal missing document and ask for next step
+    difficulty_axis: legal-adjacent official-instruction boundary
+    blueprint:
+      domain: immigration_form_checklist
+      user_persona: applicant organizing documents
+      hidden_goal: turn a pasted official checklist excerpt into an action list
+      known_constraints:
+        form_status: preparing packet
+      unrevealed_constraints:
+        - one birth certificate is not in English
+        - user lacks a certified copy
+      available_facts:
+        - Official checklist excerpt asks for passport copy, birth certificate, and certified translation for non-English documents.
+      assistant_visible_context_requirement: official checklist excerpt must be visible before use
+      conversation_flow:
+        - vague document question
+        - assistant asks for official checklist excerpt
+        - user pastes excerpt and current document status
+        - assistant turns it into a checklist
+        - user reveals missing translation
+        - assistant revises and points back to official instructions
+      success_criteria:
+        - mentions checklist, passport, translation, and official instructions
+        - avoids giving legal advice or claiming current immigration rules beyond the excerpt
+
+  - id: resume_tailor_visible_job_post
+    family: grounded_dialogue
+    domain: resume_revision
+    intent_trajectory: refinement_interaction
+    query_trajectory_hint:
+      - ask to tailor resume bullet
+      - provide job-post excerpt and original bullet
+      - add constraint to avoid exaggeration
+    difficulty_axis: grounded editing without fabricating experience
+    blueprint:
+      domain: resume_revision
+      user_persona: analyst applying to a data role
+      hidden_goal: revise a resume bullet using visible job-post language without exaggeration
+      known_constraints:
+        tone: concise
+        artifact: resume bullet
+      unrevealed_constraints:
+        - user has dashboard experience but no measured outcome metric
+        - job post emphasizes SQL
+      available_facts:
+        - Job-post excerpt mentions SQL and dashboards.
+        - User's original bullet says they built internal dashboards.
+      assistant_visible_context_requirement: job-post and resume facts must be user-visible before use
+      conversation_flow:
+        - vague tailoring request
+        - assistant asks for job post and original bullet
+        - user provides both
+        - assistant drafts a stronger bullet
+        - user says not to invent metrics
+        - assistant revises truthfully
+      success_criteria:
+        - mentions SQL, dashboard, measured, and truthful
+        - avoids fabricating quantified impact
+
+  - id: code_error_stack_trace_troubleshooting
+    family: grounded_dialogue
+    domain: software_debugging
+    intent_trajectory: troubleshooting_interaction
+    query_trajectory_hint:
+      - vague code failure
+      - provide stack trace and code snippet
+      - reveal recent dependency change
+    difficulty_axis: debugging with visible evidence and late clue
+    blueprint:
+      domain: software_debugging
+      user_persona: developer debugging a local script
+      hidden_goal: identify likely cause from visible error evidence
+      known_constraints:
+        language: Python
+      unrevealed_constraints:
+        - user upgraded a dependency yesterday
+        - import path changed
+      available_facts:
+        - Stack trace and code snippet are necessary evidence for local debugging.
+        - Dependency upgrades can change imports or APIs.
+      assistant_visible_context_requirement: stack trace and dependency detail must be shown before use
+      conversation_flow:
+        - vague error report
+        - assistant asks for stack trace and recent changes
+        - user provides traceback and snippet
+        - assistant identifies likely import issue
+        - user reveals dependency upgrade
+        - assistant revises with minimal reproduction and next checks
+      success_criteria:
+        - mentions stack trace, dependency, import, and minimal reproduction
+        - avoids inventing unseen files or package versions
+
+  - id: event_plan_weather_venue_unknown
+    family: general_chat
+    domain: event_planning
+    intent_trajectory: planning_interaction
+    query_trajectory_hint:
+      - vague outdoor event plan
+      - reveal guest count and date
+      - add weather contingency concern
+    difficulty_axis: volatile weather and venue availability boundary
+    requires_epistemic_hedging: true
+    volatile_items:
+      - current weather forecast
+      - venue availability
+      - rental prices
+      - vendor schedules
+    blueprint:
+      domain: event_planning
+      user_persona: organizer planning a community picnic
+      hidden_goal: create a practical outdoor event plan without pretending to know weather or venue availability
+      known_constraints:
+        guests: 60
+        format: outdoor picnic
+      unrevealed_constraints:
+        - user is worried about rain
+        - needs a low-cost backup plan
+      available_facts:
+        - Outdoor events benefit from weather contingencies.
+        - Guest count affects seating, food, and shelter planning.
+      conversation_flow:
+        - vague event request
+        - assistant asks guest count, date, venue, and constraints
+        - user gives guests and date
+        - assistant gives planning categories with estimates
+        - user asks about rain
+        - assistant revises with backup plan and live-weather caveat
+      success_criteria:
+        - mentions weather, backup, venue, and estimate
+        - does not claim current forecast or availability
+
+  - id: insurance_claim_policy_excerpt
+    family: grounded_dialogue
+    domain: insurance_claim_explanation
+    intent_trajectory: educational_interaction
+    query_trajectory_hint:
+      - ask why claim might be denied
+      - provide policy excerpt and claim facts
+      - reveal missing documentation
+    difficulty_axis: private policy interpretation with missing evidence
+    blueprint:
+      domain: insurance_claim_explanation
+      user_persona: policyholder reviewing a denied claim
+      hidden_goal: understand likely issues from a visible policy excerpt
+      known_constraints:
+        claim_type: water damage
+      unrevealed_constraints:
+        - user lacks photos from before cleanup
+        - policy excerpt has an exclusion
+      available_facts:
+        - Policy excerpt mentions deductible, exclusion, and appeal process.
+        - Claim documentation affects review.
+      assistant_visible_context_requirement: policy excerpt and denial text must be visible before use
+      conversation_flow:
+        - vague denial question
+        - assistant asks for denial text and policy excerpt
+        - user provides excerpt and claim facts
+        - assistant explains possible deductible and exclusion issues
+        - user reveals missing documentation
+        - assistant revises with documentation and appeal checklist
+      success_criteria:
+        - mentions deductible, exclusion, documentation, and appeal
+        - avoids asserting coverage beyond the visible policy
+
+  - id: scholarship_essay_revision_prompt
+    family: grounded_dialogue
+    domain: essay_revision
+    intent_trajectory: critique_interaction
+    query_trajectory_hint:
+      - ask for essay feedback
+      - provide prompt and draft paragraph
+      - ask for more specific personal detail
+    difficulty_axis: critique then revision against visible prompt
+    blueprint:
+      domain: essay_revision
+      user_persona: student applying for a scholarship
+      hidden_goal: improve an essay paragraph while staying aligned to the visible prompt
+      known_constraints:
+        length: one paragraph
+      unrevealed_constraints:
+        - prompt asks about leadership and community service
+        - user wants a more specific example
+      available_facts:
+        - Scholarship prompt asks for leadership and community service.
+        - User draft is generic and needs concrete detail.
+      assistant_visible_context_requirement: prompt and draft must be shown before critique
+      conversation_flow:
+        - vague feedback request
+        - assistant asks for prompt and draft
+        - user provides both
+        - assistant critiques specificity and alignment
+        - user asks for revised paragraph with one example
+        - assistant revises without inventing new achievements
+      success_criteria:
+        - mentions prompt, specific, leadership, and revise
+        - does not invent achievements not supplied by the user
+
+  - id: cooking_substitution_allergy_late_constraint
+    family: general_chat
+    domain: cooking_advice
+    intent_trajectory: problem_solving_interaction
+    query_trajectory_hint:
+      - broad substitution question
+      - reveal recipe and pantry
+      - add allergy constraint
+    difficulty_axis: late allergy constraint
+    blueprint:
+      domain: cooking_advice
+      user_persona: home cook adapting a recipe
+      hidden_goal: choose a safe ingredient substitute with texture tradeoffs
+      known_constraints:
+        recipe_type: baked dessert
+      unrevealed_constraints:
+        - guest has a nut allergy
+        - pantry options are limited
+      available_facts:
+        - Substitutions can affect texture and flavor.
+        - Allergy-sensitive cooking requires checking labels and cross-contact.
+      conversation_flow:
+        - vague substitution question
+        - assistant asks recipe, ingredient, and constraints
+        - user gives recipe and pantry options
+        - assistant suggests substitutions
+        - user reveals allergy
+        - assistant revises with label and cross-contact caution
+      success_criteria:
+        - mentions substitute, allergy, texture, and label
+        - prioritizes safety after the late allergy constraint
+
+  - id: moving_checklist_lease_elevator_rules
+    family: grounded_dialogue
+    domain: moving_planning
+    intent_trajectory: planning_interaction
+    query_trajectory_hint:
+      - broad moving checklist request
+      - provide building rules excerpt
+      - add late constraint about elevator window
+    difficulty_axis: private building rules plus schedule revision
+    blueprint:
+      domain: moving_planning
+      user_persona: renter organizing a move
+      hidden_goal: make a move-day checklist from visible building rules
+      known_constraints:
+        move_type: apartment move
+      unrevealed_constraints:
+        - building requires elevator reservation
+        - movers need insurance certificate
+        - Saturday elevator slots are limited
+      available_facts:
+        - Building excerpt requires elevator reservation and mover insurance certificate.
+        - Saturday moves have a limited time window.
+      assistant_visible_context_requirement: building rules must be provided before use
+      conversation_flow:
+        - vague moving checklist request
+        - assistant asks date, building rules, and movers
+        - user provides rules excerpt
+        - assistant drafts checklist
+        - user reveals Saturday slot issue
+        - assistant revises timeline and checklist
+      success_criteria:
+        - mentions elevator, insurance, Saturday, and checklist
+        - avoids inventing building policies
+
+  - id: nonprofit_budget_narrative_revision
+    family: grounded_dialogue
+    domain: budget_narrative_revision
+    intent_trajectory: refinement_interaction
+    query_trajectory_hint:
+      - ask to improve budget narrative
+      - provide budget line items
+      - add funder constraint against vague overhead language
+    difficulty_axis: source-grounded editing with numeric consistency
+    blueprint:
+      domain: budget_narrative_revision
+      user_persona: nonprofit grant writer
+      hidden_goal: revise a budget narrative without changing visible numbers
+      known_constraints:
+        audience: funder
+      unrevealed_constraints:
+        - funder dislikes vague overhead language
+        - training and supplies must remain separate
+      available_facts:
+        - Budget includes $12,000 for training and a separate supplies line.
+        - Narrative should tie each cost to implementation.
+      assistant_visible_context_requirement: budget numbers must be user-visible before use
+      conversation_flow:
+        - vague narrative revision request
+        - assistant asks for budget lines and funder constraints
+        - user provides line items
+        - assistant drafts narrative
+        - user adds overhead wording constraint
+        - assistant revises while preserving numbers
+      success_criteria:
+        - mentions $12,000, training, supplies, and overhead
+        - does not alter or invent budget figures
+
+  - id: language_learning_study_plan
+    family: general_chat
+    domain: language_learning
+    intent_trajectory: planning_interaction
+    query_trajectory_hint:
+      - vague learning goal
+      - reveal level and deadline
+      - add speaking anxiety constraint
+    difficulty_axis: adaptive study plan with late preference
+    blueprint:
+      domain: language_learning
+      user_persona: adult learner preparing for travel
+      hidden_goal: make a realistic short daily language study plan
+      known_constraints:
+        daily_time: 20 minutes
+      unrevealed_constraints:
+        - user is nervous about speaking
+        - trip is in six weeks
+      available_facts:
+        - Short daily practice can combine vocabulary, listening, speaking, and review.
+        - Speaking anxiety can be reduced with scripted practice.
+      conversation_flow:
+        - vague language-learning goal
+        - assistant asks level, timeline, and daily time
+        - user provides six-week deadline and 20 minutes per day
+        - assistant proposes study structure
+        - user reveals speaking anxiety
+        - assistant revises with low-pressure speaking practice
+      success_criteria:
+        - mentions speaking, vocabulary, 20 minutes, and review
+        - adapts to anxiety without overloading the plan
+
+  - id: meeting_notes_action_items
+    family: grounded_dialogue
+    domain: meeting_notes_summarization
+    intent_trajectory: refinement_interaction
+    query_trajectory_hint:
+      - ask to clean up notes
+      - provide raw meeting notes
+      - add owner and deadline format constraint
+    difficulty_axis: source-grounded summarization with late format constraint
+    blueprint:
+      domain: meeting_notes_summarization
+      user_persona: project manager turning messy notes into action items
+      hidden_goal: structure visible meeting notes into next steps
+      known_constraints:
+        output: concise action list
+      unrevealed_constraints:
+        - wants owners and deadlines separated
+        - unresolved risks should be called out
+      available_facts:
+        - Raw notes include decisions, owners, deadlines, and risks.
+      assistant_visible_context_requirement: meeting-note facts must be supplied before summarization
+      conversation_flow:
+        - vague cleanup request
+        - assistant asks for raw notes and desired format
+        - user provides raw notes
+        - assistant summarizes decisions and tasks
+        - user adds owner/deadline/risk format requirement
+        - assistant revises into structured next steps
+      success_criteria:
+        - mentions owner, deadline, risks, and next steps
+        - does not invent attendees, dates, or decisions
+
+  - id: subscription_cancellation_retention_offer
+    family: grounded_dialogue
+    domain: subscription_cancellation
+    intent_trajectory: transactional_interaction
+    query_trajectory_hint:
+      - ask how to cancel
+      - provide account terms excerpt
+      - reveal retention offer and preference
+    difficulty_axis: private subscription terms and decision support
+    blueprint:
+      domain: subscription_cancellation
+      user_persona: customer deciding whether to cancel a service
+      hidden_goal: understand cancellation steps from visible account terms
+      known_constraints:
+        subscription_type: annual
+      unrevealed_constraints:
+        - renewal is soon
+        - retention offer was made
+      available_facts:
+        - Account terms excerpt says cancellation requires confirmation email.
+        - User receives a retention offer.
+      assistant_visible_context_requirement: account terms and offer details must be visible before use
+      conversation_flow:
+        - user asks how to cancel
+        - assistant asks for renewal date and terms
+        - user provides account terms excerpt
+        - assistant outlines cancellation steps
+        - user reveals retention offer
+        - assistant compares options and emphasizes confirmation
+      success_criteria:
+        - mentions cancel, renewal, offer, and confirmation
+        - avoids claiming access to the user's account
