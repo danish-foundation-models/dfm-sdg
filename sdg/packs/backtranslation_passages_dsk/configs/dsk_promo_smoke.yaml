@@ -9,7 +9,6 @@ generation:
   temperature: 1.0
   train_fraction: 0.9
 sources:
-  # To use a private HuggingFace dataset, replace path with dataset: oliverkinch/dsk-bt/<source>
   - name: vejle
     source:
       path: dsk-vejle.parquet
