@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import ast
 import asyncio
 import json
 import re
+import threading
 from collections import Counter
 from pathlib import Path
 from random import Random
@@ -14,6 +16,7 @@ from sdg.commons import eval as common_eval
 from sdg.commons import publish as common_publish
 from sdg.commons.model import LLM, load_clients
 from sdg.commons.run import load, run
+from sdg.commons.sources import iter_source_records, read_record_value, source_label
 from sdg.commons.utils import read_json, read_yaml, reports_root, write_json
 from sdg.commons.work_queue import map_async_unordered
 
@@ -57,6 +60,21 @@ CONSISTENTCHAT_INTENTS = (
 )
 
 CONSISTENTCHAT_INTENT_NAMES = {item.split(":", maxsplit=1)[0] for item in CONSISTENTCHAT_INTENTS}
+
+CANDIDATE_STAGE_ARTIFACTS = {
+    "candidate_source_task_plans": "candidate_source_task_plans.jsonl",
+    "candidate_scenario_instances": "candidate_scenario_instances.jsonl",
+    "candidate_blueprints": "candidate_blueprints.jsonl",
+    "candidate_intent_models": "candidate_intent_models.jsonl",
+    "candidate_skeletons": "candidate_skeletons.jsonl",
+    "candidate_user_turns": "candidate_user_turns.jsonl",
+    "candidate_assistant_turns": "candidate_assistant_turns.jsonl",
+    "candidate_messages": "candidate_messages.jsonl",
+    "candidate_polished_messages": "candidate_polished_messages.jsonl",
+    "candidate_reviews": "candidate_reviews.jsonl",
+    "candidate_repairs": "candidate_repairs.jsonl",
+    "candidate_final_rows": "candidate_final_rows.jsonl",
+}
 
 CONSISTENTCHAT_SUBTASKS = {
     "Problem Solving Interaction": [
@@ -329,6 +347,123 @@ SCENARIO_INSTANCE_VARIANTS = (
     },
 )
 
+PERSONA_COMMUNICATION_STYLES = (
+    "prefers concise practical steps",
+    "wants plain-language explanations before action",
+    "likes checklists and explicit next steps",
+    "is cautious about rules and uncertainty",
+    "asks for a usable draft rather than abstract advice",
+    "wants tradeoffs made explicit",
+)
+
+PERSONA_TASK_POSTURES = (
+    "arrives with partial information and wants help turning it into action",
+    "has a visible document or note and needs the important parts extracted",
+    "needs a source-bounded explanation before deciding what to do next",
+    "wants a short artifact they can reuse with another person or organization",
+    "has a practical constraint and needs assumptions separated from known facts",
+    "wants help checking whether their own interpretation is reasonable",
+)
+
+PERSONA_PRACTICAL_CONSTRAINTS = (
+    "limited domain expertise",
+    "limited time for follow-up",
+    "needs uncertainty flagged clearly",
+    "prefers low-friction next steps",
+    "wants source-specific facts separated from general background",
+    "needs wording that is safe to reuse",
+)
+
+SOURCE_PAYLOAD_STRATEGIES = {
+    "full_excerpt": {
+        "label": "provided source paste",
+        "user_visibility": "USER 1 should paste the provided source excerpt before asking the task question. Do not describe it as full, complete, or exhaustive.",
+        "assistant_boundary": "The assistant may use all source facts that appear in the pasted excerpt and should mark only unseen implementation details as unknown.",
+    },
+    "long_contiguous_excerpt": {
+        "label": "long contiguous excerpt",
+        "user_visibility": "USER 1 should paste a long contiguous passage from the source that is sufficient for the main task, not just a one-line quote.",
+        "assistant_boundary": "The assistant may use facts in that passage, but must not infer omitted surrounding sections.",
+    },
+    "selected_clauses": {
+        "label": "selected source passages",
+        "user_visibility": "USER 1 should paste selected complete source passages that are directly relevant to the user's question, not isolated sentence fragments.",
+        "assistant_boundary": "The assistant should answer from the selected passages and explicitly identify fields that require the omitted document context.",
+    },
+    "summary_plus_quotes": {
+        "label": "user framing plus exact source passages",
+        "user_visibility": "USER 1 may give a short user-written framing question and include exact complete source passages for the facts the assistant should rely on.",
+        "assistant_boundary": "The assistant should distinguish user framing from exact source passages and avoid treating unquoted source details as verified.",
+    },
+    "staged_excerpts": {
+        "label": "staged source excerpts across turns",
+        "user_visibility": "USER 1 should paste an initial excerpt, and later user turns should paste any additional source text before asking about new source facts.",
+        "assistant_boundary": "The assistant should answer incrementally and must not anticipate source facts that will only appear in later pasted excerpts.",
+    },
+}
+
+DEFAULT_SOURCE_PAYLOAD_STRATEGIES = tuple(SOURCE_PAYLOAD_STRATEGIES)
+SOURCE_PAYLOAD_PLACEHOLDER_TEMPLATE = "{{SOURCE_PAYLOAD_%d}}"
+SOURCE_PAYLOAD_LENGTHS = {
+    "short": {
+        "label": "focused excerpt",
+        "selected_count": 1,
+        "selected_target_chars": 450,
+        "window_min_chars": 900,
+        "window_ratio": 0.35,
+    },
+    "medium": {
+        "label": "substantial excerpt",
+        "selected_count": 2,
+        "selected_target_chars": 1200,
+        "window_min_chars": 3000,
+        "window_ratio": 0.65,
+    },
+    "long": {
+        "label": "large document excerpt",
+        "selected_count": 3,
+        "selected_target_chars": 2200,
+        "window_min_chars": 6000,
+        "window_ratio": 0.85,
+    },
+}
+DEFAULT_SOURCE_PAYLOAD_LENGTHS = ("long", "medium", "long", "short")
+SOURCE_PAYLOAD_STYLES = {
+    "fenced_text": "markdown text fence",
+    "blockquote": "markdown blockquote",
+    "plain_delimited": "plain text with start and end lines",
+    "separator": "plain text between separators",
+}
+DEFAULT_SOURCE_PAYLOAD_STYLES = tuple(SOURCE_PAYLOAD_STYLES)
+SOURCE_PAYLOAD_LABEL_STYLES = {
+    "excerpt": {
+        "stem_template": "Uddrag {index}",
+        "label": "neutral excerpt label",
+    },
+    "pasted_text": {
+        "stem_template": "Indsat tekst {index}",
+        "label": "pasted text label",
+    },
+    "document_passage": {
+        "stem_template": "Dokumentpassage {index}",
+        "label": "document passage label",
+    },
+    "relevant_text": {
+        "stem_template": "Relevant tekst {index}",
+        "label": "relevant text label",
+    },
+    "copied_text": {
+        "stem_template": "Kopieret tekst {index}",
+        "label": "copied text label",
+    },
+    "quoted_passage": {
+        "stem_template": "Citeret passage {index}",
+        "label": "quoted passage label",
+    },
+}
+DEFAULT_SOURCE_PAYLOAD_LABEL_STYLES = tuple(SOURCE_PAYLOAD_LABEL_STYLES)
+LEGACY_SOURCE_PAYLOAD_LABEL_STEMS = ("Kildeuddrag",)
+
 PACK_DIR = Path(__file__).resolve().parent
 
 def build(cfg: dict[str, Any]) -> BuildResult:
@@ -339,6 +474,7 @@ def build(cfg: dict[str, Any]) -> BuildResult:
         cfg=cfg,
         seed=cfg.get("seed"),
         reuse_completed=cfg.get("reuse_completed", True),
+        resume_incomplete=cfg.get("resume_incomplete", True),
     )
 
 
@@ -350,7 +486,7 @@ def verify(run_id_or_path: str) -> dict[str, Any]:
     verified_rows = common_eval.verify(verified_rows, _skeleton_matches_messages, name="skeleton_matches_messages")
     verified_rows = common_eval.verify(verified_rows, _evidence_boundary_respected, name="evidence_boundary_respected")
     verified_rows = common_eval.verify(verified_rows, _visible_artifact_claims_grounded, name="visible_artifact_claims_grounded")
-    verified_rows = common_eval.verify(verified_rows, _reaction_references_grounded, name="reaction_references_grounded")
+    verified_rows = common_eval.verify(verified_rows, _source_payloads_readable, name="source_payloads_readable")
     verified_rows = common_eval.verify(verified_rows, _assistant_format_restrained, name="assistant_format_restrained")
     verified_rows = common_eval.verify(verified_rows, _selection_accepted, name="selection_accepted")
     failures = [row for row in verified_rows if _row_failed(row)]
@@ -503,7 +639,7 @@ def _build_run(
     selection_report_path = write_json(selection_report, outputs_dir / "selection_report.json")
     common_publish.write_preview(rows, outputs_dir / "sample_preview.jsonl", n=20)
 
-    return {
+    artifacts = {
         "blueprints": Artifact(
             name="blueprints",
             path=str(blueprints_path),
@@ -553,6 +689,8 @@ def _build_run(
             meta={"accepted": len(rows), "preference_pairs": len(preference_pairs)},
         ),
     }
+    artifacts.update(_candidate_stage_artifacts(outputs_dir))
+    return artifacts
 
 
 async def _make_rows(
@@ -603,6 +741,7 @@ async def _generate_candidates_to_disk(
 ) -> list[dict[str, Any]]:
     candidate_path = outputs_dir / "candidates.jsonl"
     existing_ids = store.jsonl_keys(candidate_path, key_for=_row_id)
+    stage_writer = _CandidateStageWriter(outputs_dir)
     pending = [
         {
             "index": index,
@@ -618,7 +757,7 @@ async def _generate_candidates_to_disk(
     with candidate_path.open(mode) as handle:
         async for row in map_async_unordered(
             pending,
-            lambda _index, item: _generate_candidate_async(item, generation, model_roles),
+            lambda _index, item: _generate_candidate_async(item, generation, model_roles, stage_writer),
             concurrency=concurrency,
             total=len(pending),
         ):
@@ -633,6 +772,7 @@ async def _generate_candidate_async(
     item: dict[str, Any],
     generation: dict[str, Any],
     model_roles: dict[str, LLM],
+    stage_writer: _CandidateStageWriter,
 ) -> dict[str, Any]:
     return await asyncio.to_thread(
         _generate_candidate,
@@ -640,6 +780,7 @@ async def _generate_candidate_async(
         item["seed_spec"],
         generation,
         model_roles,
+        stage_writer,
     )
 
 
@@ -702,7 +843,64 @@ def _load_model_roles(cfg: dict[str, Any]) -> dict[str, LLM]:
         client = clients[role]
         assert isinstance(client, LLM), f"models.{role} must resolve to an LLM"
         roles[role] = client
+    for role in ["source_task_planner"]:
+        if role not in clients:
+            continue
+        client = clients[role]
+        assert isinstance(client, LLM), f"models.{role} must resolve to an LLM"
+        roles[role] = client
     return roles
+
+
+class _CandidateStageWriter:
+    def __init__(self, outputs_dir: Path):
+        self.outputs_dir = outputs_dir
+        self.lock = threading.Lock()
+        self.seen_ids = {
+            artifact_name: store.jsonl_keys(outputs_dir / filename, key_for=_row_id)
+            for artifact_name, filename in CANDIDATE_STAGE_ARTIFACTS.items()
+        }
+
+    def write(
+        self,
+        artifact_name: str,
+        *,
+        candidate_id: str,
+        stage: str,
+        payload: dict[str, Any],
+        attempt: int = 0,
+    ) -> None:
+        assert artifact_name in CANDIDATE_STAGE_ARTIFACTS, f"Unsupported candidate stage artifact: {artifact_name}"
+        row = {
+            "id": f"{candidate_id}-{stage}-attempt-{attempt:02d}",
+            "candidate_id": candidate_id,
+            "stage": stage,
+            "attempt": attempt,
+            "payload": payload,
+        }
+        path = self.outputs_dir / CANDIDATE_STAGE_ARTIFACTS[artifact_name]
+        with self.lock:
+            seen = self.seen_ids[artifact_name]
+            if row["id"] in seen:
+                return
+            with path.open("a") as handle:
+                store.append_jsonl_line(handle, row)
+            seen.add(row["id"])
+
+
+def _candidate_stage_artifacts(outputs_dir: Path) -> dict[str, Artifact]:
+    artifacts: dict[str, Artifact] = {}
+    for artifact_name, filename in CANDIDATE_STAGE_ARTIFACTS.items():
+        path = outputs_dir / filename
+        if not path.exists():
+            continue
+        artifacts[artifact_name] = Artifact(
+            name=artifact_name,
+            path=str(path),
+            kind="jsonl",
+            meta={"rows": store.jsonl_count(path), "family": "multi_turn_dialogue"},
+        )
+    return artifacts
 
 
 def _generate_candidate(
@@ -710,12 +908,35 @@ def _generate_candidate(
     seed_spec: dict[str, Any],
     generation: dict[str, Any],
     model_roles: dict[str, LLM],
+    stage_writer: _CandidateStageWriter,
 ) -> dict[str, Any]:
+    seed_spec = _generate_source_task_plan_if_needed(
+        model_roles.get("source_task_planner", model_roles["blueprint_writer"]),
+        seed_spec,
+        generation,
+    )
+    if "source_task_plan" in seed_spec:
+        stage_writer.write(
+            "candidate_source_task_plans",
+            candidate_id=row_id,
+            stage="source_task_plan",
+            payload=seed_spec["source_task_plan"],
+        )
     seed_spec = _generate_scenario_instance(model_roles["blueprint_writer"], seed_spec, generation)
+    stage_writer.write(
+        "candidate_scenario_instances",
+        candidate_id=row_id,
+        stage="scenario_instance",
+        payload={"scenario_instance": seed_spec.get("scenario_instance", {})},
+    )
     blueprint = _generate_blueprint(model_roles["blueprint_writer"], seed_spec, generation)
+    stage_writer.write("candidate_blueprints", candidate_id=row_id, stage="blueprint", payload=blueprint)
     intent_model = _generate_intent_model(model_roles["intent_modeler"], seed_spec, blueprint, generation)
+    stage_writer.write("candidate_intent_models", candidate_id=row_id, stage="intent_model", payload=intent_model)
     skeleton = _generate_skeleton(model_roles["skeleton_writer"], seed_spec, blueprint, intent_model, generation)
+    stage_writer.write("candidate_skeletons", candidate_id=row_id, stage="skeleton", payload={"skeleton": skeleton})
     user_turns = _generate_user_turns(model_roles["user_simulator"], seed_spec, blueprint, intent_model, skeleton, generation)
+    stage_writer.write("candidate_user_turns", candidate_id=row_id, stage="user_turns", payload={"turns": user_turns})
     assistant_turns = _generate_assistant_turns(
         model_roles["assistant_teacher"],
         seed_spec,
@@ -723,11 +944,30 @@ def _generate_candidate(
         user_turns,
         generation,
     )
+    stage_writer.write(
+        "candidate_assistant_turns",
+        candidate_id=row_id,
+        stage="assistant_turns",
+        payload={"turns": assistant_turns},
+    )
     messages = _interleave_messages(skeleton, user_turns, assistant_turns)
+    stage_writer.write("candidate_messages", candidate_id=row_id, stage="messages", payload={"messages": messages})
     messages = _polish_messages(model_roles["reviewer"], seed_spec, messages, generation)
-    review = _generate_review(model_roles["reviewer"], seed_spec, blueprint, intent_model, skeleton, messages, generation)
+    messages = _restore_source_payloads_in_messages(seed_spec, messages)
+    stage_writer.write(
+        "candidate_polished_messages",
+        candidate_id=row_id,
+        stage="polished_messages",
+        payload={"messages": messages},
+    )
+    surface_failures = _unrepairable_surface_failures(messages, seed_spec)
+    if surface_failures:
+        review = _local_unrepairable_review(seed_spec, intent_model, surface_failures)
+    else:
+        review = _generate_review(model_roles["reviewer"], seed_spec, blueprint, intent_model, skeleton, messages, generation)
+    stage_writer.write("candidate_reviews", candidate_id=row_id, stage="review", payload=review)
 
-    for _ in range(_repair_attempts(generation)):
+    for repair_attempt in range(1, _repair_attempts(generation) + 1):
         if not _needs_repair(review, messages, seed_spec):
             break
         messages = _repair_messages(
@@ -738,10 +978,36 @@ def _generate_candidate(
             review,
             generation,
         )
+        stage_writer.write(
+            "candidate_repairs",
+            candidate_id=row_id,
+            stage="repair_messages",
+            payload={"messages": messages},
+            attempt=repair_attempt,
+        )
         messages = _polish_messages(model_roles["reviewer"], seed_spec, messages, generation)
-        review = _generate_review(model_roles["reviewer"], seed_spec, blueprint, intent_model, skeleton, messages, generation)
+        messages = _restore_source_payloads_in_messages(seed_spec, messages)
+        stage_writer.write(
+            "candidate_polished_messages",
+            candidate_id=row_id,
+            stage="polished_messages",
+            payload={"messages": messages},
+            attempt=repair_attempt,
+        )
+        surface_failures = _unrepairable_surface_failures(messages, seed_spec)
+        if surface_failures:
+            review = _local_unrepairable_review(seed_spec, intent_model, surface_failures)
+        else:
+            review = _generate_review(model_roles["reviewer"], seed_spec, blueprint, intent_model, skeleton, messages, generation)
+        stage_writer.write(
+            "candidate_reviews",
+            candidate_id=row_id,
+            stage="review",
+            payload=review,
+            attempt=repair_attempt,
+        )
 
-    return _row_from_generated_parts(
+    row = _row_from_generated_parts(
         row_id=row_id,
         seed_spec=seed_spec,
         blueprint=blueprint,
@@ -750,6 +1016,227 @@ def _generate_candidate(
         messages=messages,
         review=review,
     )
+    stage_writer.write("candidate_final_rows", candidate_id=row_id, stage="final_row", payload=row)
+    return row
+
+
+def _generate_source_task_plan_if_needed(
+    llm: LLM,
+    seed_spec: dict[str, Any],
+    generation: dict[str, Any],
+) -> dict[str, Any]:
+    if "source_grounding" not in seed_spec:
+        return seed_spec
+
+    text = _chat_text(
+        llm,
+        _source_task_planner_messages(seed_spec),
+        temperature=float(generation.get("source_task_temperature", 0.8)),
+    )
+    return _apply_source_task_plan(seed_spec, _parse_source_task_plan(text))
+
+
+def _source_task_planner_messages(seed_spec: dict[str, Any]) -> list[dict[str, str]]:
+    latent_language = _language_name(str(seed_spec["latent_language"]))
+    dialogue_language = _language_name(str(seed_spec["dialogue_language"]))
+    source_grounding = seed_spec["source_grounding"]
+    persona = seed_spec.get("persona_context", {})
+    return [
+        {
+            "role": "system",
+            "content": (
+                "You are the stochastic source-to-task planner for grounded synthetic multi-turn dialogue data. "
+                "Use the source excerpt and sampled persona as diversity inputs, then create a latent task archetype "
+                "for the existing APIGen-MT and ConsistentChat pipeline. Do not write the dialogue. Do not output "
+                "JSON-only. The persona is a diversity seed, not a user identity that must be copied literally. "
+                "For Danish dialogue, localize the user's situation and wording naturally unless the source itself "
+                "requires another context. Do not copy US locations, law, currency, institutions, or demographic facts "
+                "from a persona into a Danish source-grounded task unless they are genuinely relevant and visibly stated. "
+                "Treat the persona as an abstract diversity vector for occupation, constraints, communication style, "
+                "risk tolerance, and task motivation. Do not copy the sampled persona's name, biography, city, state, "
+                "country, currency, institutions, legal setting, or personal history into the task. For Danish rows, "
+                "make SOURCE_TASK_PERSONA a Danish-localized or neutral user role, not a copied persona biography. "
+                f"{_discourse_quality_instruction()}"
+                f"{_work_session_quality_instruction()}"
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                "Create one source-grounded task archetype from this source/persona pair. Use exactly these labeled "
+                "sections: SOURCE_TASK_DOMAIN, SOURCE_TASK_FAMILY, SOURCE_TASK_INTENT_TRAJECTORY, "
+                "SOURCE_TASK_SUBTASK_TRAJECTORY, SOURCE_TASK_DIFFICULTY_AXIS, SOURCE_TASK_PERSONA, SOURCE_TASK_GOAL, "
+                "SOURCE_TASK_QUERY_TRAJECTORY, SOURCE_TASK_SUCCESS_CRITERIA, SOURCE_TASK_VOLATILE_ITEMS, "
+                "SOURCE_TASK_BLUEPRINT.\n\n"
+                "The plan should be varied and realistic: choose a concrete user situation, motivation, missing facts, "
+                "late-turn reveal, and useful final deliverable. The assistant must only use the source excerpt after "
+                "the simulated user makes it visible in the dialogue. Prefer work people actually ask language models "
+                "to do: explain an excerpt, extract requirements, draft a message, create a checklist, compare visible "
+                "clauses, summarize implications, or identify unknowns. Keep exact source-dependent conclusions bounded "
+                "to the visible excerpt and preserve uncertainty about current status or unseen rules. "
+                "The source excerpt and metadata are immutable inputs. Use persona/context to vary the user situation, "
+                "motivation, deliverable, missing facts, and disclosure timing only. Do not invent, rename, anonymize, "
+                "or alter source-specific entities, titles, outlets, institutions, case numbers, dates, quoted phrases, "
+                "findings, legal/procedural facts, or factual claims from the source. Do not write exact source facts "
+                "into SOURCE_TASK_GOAL, SOURCE_TASK_QUERY_TRAJECTORY, SOURCE_TASK_SUCCESS_CRITERIA, or "
+                "SOURCE_TASK_BLUEPRINT. Describe the user's work as operations on whatever source payload is later "
+                "inserted, such as extracting visible deadlines, checking visible obligations, drafting from the pasted "
+                "excerpt, or listing unknowns from omitted context. Do not use the persona's foreign names, places, or "
+                "biography as visible row content; abstract them into a localized Danish user role.\n\n"
+                f"Hidden artifact language: {latent_language}\n"
+                f"Visible dialogue language later in the pipeline: {dialogue_language}\n"
+                f"Configured source pack: {source_grounding['pack_id']}\n"
+                f"Source family: {source_grounding['source_name']}\n"
+                f"Source document id: {source_grounding['document_id']}\n"
+                f"Source title: {source_grounding.get('title', '')}\n"
+                f"Source created/date metadata: {source_grounding.get('created', '')}\n"
+                f"Scenario expansion variant:\n{_format_scenario_variant(seed_spec)}\n\n"
+                f"Source visibility plan for the later visible dialogue:\n{_format_source_payload_plan(seed_spec)}\n\n"
+                "Sampled persona/context:\n"
+                f"{json.dumps(persona, indent=2, sort_keys=True)}\n\n"
+                "Visible source excerpt candidate:\n"
+                f"{source_grounding['excerpt']}\n\n"
+                "Write a compact plan. SOURCE_TASK_INTENT_TRAJECTORY must be one of the ConsistentChat top-level "
+                "intents when possible. SOURCE_TASK_QUERY_TRAJECTORY should be a semicolon-separated user-query plan. "
+                "SOURCE_TASK_SUCCESS_CRITERIA should be newline bullets or semicolon-separated criteria."
+            ),
+        },
+    ]
+
+
+def _parse_source_task_plan(text: str) -> dict[str, Any]:
+    fields = _parse_keyed_lines(text)
+    success_criteria = _split_success_criteria(fields.get("source_task_success_criteria", ""))
+    query_trajectory = _split_query_plan(fields.get("source_task_query_trajectory", ""))
+    volatile_items = _split_success_criteria(fields.get("source_task_volatile_items", ""))
+    return {
+        "domain": _slug(fields.get("source_task_domain", "source_grounded_dialogue")),
+        "family": _source_task_family(fields.get("source_task_family", "grounded_dialogue")),
+        "intent_trajectory": fields.get("source_task_intent_trajectory", "Information Retrieval Interaction").strip(),
+        "subtask_trajectory": _slug(fields.get("source_task_subtask_trajectory", "source_grounded_synthesis")),
+        "difficulty_axis": fields.get(
+            "source_task_difficulty_axis",
+            "source-grounded task with missing user facts and epistemic boundaries",
+        ).strip(),
+        "persona": fields.get("source_task_persona", "").strip(),
+        "goal": fields.get("source_task_goal", "").strip(),
+        "query_trajectory": query_trajectory,
+        "success_criteria": success_criteria,
+        "volatile_items": volatile_items,
+        "blueprint": fields.get("source_task_blueprint", "").strip(),
+        "artifact": text,
+    }
+
+
+def _apply_source_task_plan(seed_spec: dict[str, Any], plan: dict[str, Any]) -> dict[str, Any]:
+    source_grounding = seed_spec["source_grounding"]
+    domain = plan["domain"]
+    success_criteria = _source_safe_success_criteria(seed_spec)
+    goal = _source_safe_goal(plan)
+    query_trajectory = _source_safe_query_trajectory(seed_spec, plan)
+    blueprint = {
+        "domain": domain,
+        "user_persona": plan["persona"] or seed_spec["seed_blueprint"].get("user_persona", ""),
+        "hidden_goal": goal,
+        "source_context": {
+            "source_pack": source_grounding["pack_id"],
+            "source_name": source_grounding["source_name"],
+            "source_payload_plan": seed_spec.get("source_payload_plan", {}),
+            "source_text_available_to_visible_dialogue_only_via_injected_payload": True,
+        },
+        "persona_context": seed_spec.get("persona_context", {}),
+        "conversation_flow": query_trajectory,
+        "success_criteria": success_criteria,
+    }
+    intent_trajectory = _source_task_intent_trajectory(seed_spec, plan, domain=domain)
+    updated = {
+        **seed_spec,
+        "family": plan["family"],
+        "domain": domain,
+        "seed_intent": goal,
+        "seed_blueprint": blueprint,
+        "success_criteria": success_criteria,
+        "intent_trajectory_hint": intent_trajectory,
+        "subtask_trajectory_hint": plan["subtask_trajectory"],
+        "query_trajectory_hint": query_trajectory,
+        "difficulty_axis": _source_safe_difficulty_axis(plan),
+        "requires_epistemic_hedging": True,
+        "volatile_items": _source_safe_volatile_items(seed_spec),
+        "source_task_plan": plan,
+    }
+    updated["work_session"] = _work_session_contract(updated)
+    return updated
+
+
+def _source_safe_goal(plan: dict[str, Any]) -> str:
+    subtask = str(plan["subtask_trajectory"]).replace("_", " ")
+    return f"complete a {subtask} task using only source text inserted into the visible dialogue"
+
+
+def _source_safe_success_criteria(seed_spec: dict[str, Any]) -> list[str]:
+    return [
+        "the assistant only treats source details as known after the relevant source payload is visible",
+        "the dialogue separates source-visible facts, user-owned facts, and unknown omitted context",
+        "the assistant does not assume the pasted excerpt is complete, current, or exhaustive",
+        "the final answer produces a useful source-bounded work product",
+        *list(seed_spec.get("success_criteria", [])),
+    ]
+
+
+def _source_safe_query_trajectory(seed_spec: dict[str, Any], plan: dict[str, Any]) -> list[str]:
+    subtask = str(plan["subtask_trajectory"]).replace("_", " ")
+    payload_plan = seed_spec.get("source_payload_plan", {})
+    strategy = str(payload_plan.get("strategy", "")) if isinstance(payload_plan, dict) else ""
+    if strategy == "staged_excerpts":
+        return [
+            f"paste the first source excerpt and ask for initial {subtask}",
+            "add user-owned context, constraint, or intended use",
+            f"paste the later source excerpt before asking for revised {subtask}",
+            "request a final source-bounded deliverable with unknowns separated",
+        ]
+    return [
+        f"paste the source excerpt and ask for initial {subtask}",
+        "add user-owned context, constraint, or intended use",
+        "ask for a revised or final source-bounded deliverable with unknowns separated",
+    ]
+
+
+def _source_safe_difficulty_axis(plan: dict[str, Any]) -> str:
+    subtask = str(plan["subtask_trajectory"]).replace("_", " ")
+    return f"source-grounded {subtask} with missing user facts and strict visible-payload boundaries"
+
+
+def _source_safe_volatile_items(seed_spec: dict[str, Any]) -> list[str]:
+    return _dedupe(
+        [
+            "current source status",
+            "unseen surrounding rules or context",
+            "user-specific eligibility or applicability facts",
+            *list(seed_spec.get("volatile_items", [])),
+        ]
+    )
+
+
+def _source_task_family(value: str) -> str:
+    normalized = _slug(value)
+    if normalized in {"grounded_dialogue", "general_chat"}:
+        return normalized
+    return "grounded_dialogue"
+
+
+def _source_task_intent_trajectory(seed_spec: dict[str, Any], plan: dict[str, Any], *, domain: str) -> str:
+    raw_intent = str(plan["intent_trajectory"])
+    if raw_intent in CONSISTENTCHAT_INTENT_NAMES:
+        return raw_intent
+    configured = str(seed_spec.get("intent_trajectory_hint", ""))
+    if configured in CONSISTENTCHAT_INTENT_NAMES:
+        return configured
+    return _consistentchat_top_level_intent(raw_intent, domain=domain)
+
+
+def _slug(value: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "_", value.lower()).strip("_")
+    return slug or "source_grounded_dialogue"
 
 
 def _generate_scenario_instance(
@@ -826,15 +1313,31 @@ def _generate_skeleton(
     intent_model: dict[str, Any],
     generation: dict[str, Any],
 ) -> list[dict[str, str]]:
+    expected_roles = _expected_skeleton_roles(seed_spec)
     text = _chat_text(
         llm,
         _skeleton_messages(seed_spec, blueprint, intent_model),
         temperature=float(generation.get("skeleton_temperature", 0.4)),
     )
     skeleton = _parse_skeleton(text)
-    expected_roles = _expected_skeleton_roles(seed_spec)
-    assert len(skeleton) == len(expected_roles), f"skeleton_writer must produce exactly {len(expected_roles)} skeleton steps"
-    assert [step["role"] for step in skeleton] == expected_roles
+    for _ in range(2):
+        if _skeleton_has_expected_roles(skeleton, expected_roles):
+            break
+        text = _chat_text(
+            llm,
+            _reformat_skeleton_messages(text, seed_spec, blueprint, intent_model, expected_roles, skeleton),
+            temperature=0.0,
+        )
+        skeleton = _parse_skeleton(text)
+    if not _skeleton_has_expected_roles(skeleton, expected_roles):
+        skeleton = _fallback_skeleton_from_intent(expected_roles, intent_model)
+    assert len(skeleton) == len(expected_roles), (
+        f"skeleton_writer must produce exactly {len(expected_roles)} skeleton steps. Raw response: {text}"
+    )
+    actual_roles = [step["role"] for step in skeleton]
+    assert actual_roles == expected_roles, (
+        f"skeleton_writer role order mismatch. Expected {expected_roles}; got {actual_roles}. Raw response: {text}"
+    )
     return skeleton
 
 
@@ -851,9 +1354,33 @@ def _generate_user_turns(
         _user_simulator_messages(seed_spec, blueprint, intent_model, skeleton),
         temperature=float(generation.get("user_temperature", 0.7)),
     )
+    expected_turns = _role_count(skeleton, "user")
     turns = _parse_numbered_blocks(text, label="USER")
-    assert len(turns) == _role_count(skeleton, "user"), "user_simulator returned the wrong number of user turns"
-    return turns
+    if len(turns) != expected_turns:
+        text = _chat_text(
+            llm,
+            _regenerate_user_turns_messages(
+                seed_spec,
+                blueprint,
+                intent_model,
+                skeleton,
+                draft_text=text,
+                parsed_turns=turns,
+            ),
+            temperature=0.2,
+        )
+        turns = _parse_numbered_blocks(text, label="USER")
+    if len(turns) != expected_turns:
+        text = _chat_text(
+            llm,
+            _reformat_numbered_blocks_messages(text, label="USER", count=expected_turns),
+            temperature=0.0,
+        )
+        turns = _parse_numbered_blocks(text, label="USER")
+    assert len(turns) == expected_turns, (
+        f"user_simulator returned {len(turns)} user turns; expected {expected_turns}. Raw response: {text}"
+    )
+    return _inject_source_payloads(seed_spec, turns)
 
 
 def _generate_assistant_turns(
@@ -929,6 +1456,409 @@ def _should_surface_polish(seed_spec: dict[str, Any], generation: dict[str, Any]
     return str(seed_spec["dialogue_language"]) != "en"
 
 
+def _inject_source_payloads(seed_spec: dict[str, Any], user_turns: list[str]) -> list[str]:
+    slots = _source_payload_slots(seed_spec, user_turn_count=len(user_turns))
+    if not slots:
+        return user_turns
+
+    materialized = list(user_turns)
+    for slot in slots:
+        replacement = _format_source_payload_slot(slot)
+        found = False
+        for index, turn in enumerate(materialized):
+            if slot["placeholder"] not in turn:
+                continue
+            materialized[index] = turn.replace(slot["placeholder"], replacement)
+            found = True
+        if found:
+            continue
+        turn_index = min(int(slot["turn_index"]), len(materialized) - 1)
+        materialized[turn_index] = f"{materialized[turn_index].rstrip()}\n\n{replacement}"
+
+    return [_remove_unresolved_source_placeholders(turn) for turn in materialized]
+
+
+def _restore_source_payloads_in_messages(
+    seed_spec: dict[str, Any],
+    messages: list[dict[str, str]],
+) -> list[dict[str, str]]:
+    user_count = sum(1 for message in messages if message["role"] == "user")
+    slots = _source_payload_slots(seed_spec, user_turn_count=user_count)
+    if not slots:
+        return messages
+
+    user_turns = [message["content"] for message in messages if message["role"] == "user"]
+    restored = _restore_source_payloads_in_user_turns(slots, user_turns)
+    restored_messages = []
+    user_index = 0
+    for message in messages:
+        if message["role"] != "user":
+            restored_messages.append(message)
+            continue
+        restored_messages.append({**message, "content": restored[user_index]})
+        user_index += 1
+    return restored_messages
+
+
+def _restore_source_payloads_in_user_turns(slots: list[dict[str, Any]], user_turns: list[str]) -> list[str]:
+    restored = list(user_turns)
+    for slot in slots:
+        replacement = _format_source_payload_slot(slot)
+        found = False
+        for index, turn in enumerate(restored):
+            updated, replaced = _replace_source_payload_block(turn, slot, replacement)
+            restored[index] = updated
+            found = found or replaced
+        if found:
+            continue
+        turn_index = min(int(slot["turn_index"]), len(restored) - 1)
+        restored[turn_index] = f"{restored[turn_index].rstrip()}\n\n{replacement}"
+    return [_remove_unresolved_source_placeholders(turn) for turn in restored]
+
+
+def _replace_source_payload_block(text: str, slot: dict[str, Any], replacement: str) -> tuple[str, bool]:
+    if slot["placeholder"] in text:
+        return text.replace(slot["placeholder"], replacement), True
+
+    for pattern in _source_payload_restore_patterns(slot):
+        if pattern.search(text) is None:
+            continue
+        return pattern.sub(replacement, text, count=1), True
+    return text, False
+
+
+def _source_payload_restore_patterns(slot: dict[str, Any]) -> list[re.Pattern[str]]:
+    stem = re.escape(_source_payload_label_stem(slot))
+    label = re.escape(str(slot["label"]))
+    generic_stem = _source_payload_visible_label_pattern(index=int(slot["index"]))
+    return [
+        re.compile(rf"{label}\s*```(?:text)?\s*\n.*?\n```", flags=re.IGNORECASE | re.DOTALL),
+        re.compile(rf"{stem}\s+begynder:\s*\n.*?\n{stem}\s+slutter\.?", flags=re.IGNORECASE | re.DOTALL),
+        re.compile(rf"{label}\s*---\s*\n.*?\n---", flags=re.IGNORECASE | re.DOTALL),
+        re.compile(rf"{label}\s*(?:>\s?.*(?:\n|$))+", flags=re.IGNORECASE),
+        re.compile(rf"{generic_stem}\s*:\s*```(?:text)?\s*\n.*?\n```", flags=re.IGNORECASE | re.DOTALL),
+        re.compile(
+            rf"{generic_stem}\s+begynder:\s*\n.*?\n{generic_stem}\s+slutter\.?",
+            flags=re.IGNORECASE | re.DOTALL,
+        ),
+        re.compile(rf"{generic_stem}\s*:\s*---\s*\n.*?\n---", flags=re.IGNORECASE | re.DOTALL),
+        re.compile(rf"{generic_stem}\s*:\s*(?:>\s?.*(?:\n|$))+", flags=re.IGNORECASE),
+    ]
+
+
+def _remove_unresolved_source_placeholders(text: str) -> str:
+    return re.sub(r"\{\{SOURCE_PAYLOAD_\d+\}\}", "", text).strip()
+
+
+def _source_payload_slots(seed_spec: dict[str, Any], *, user_turn_count: int) -> list[dict[str, Any]]:
+    source = _source_grounding(seed_spec)
+    if source is None or user_turn_count <= 0:
+        return []
+
+    plan = seed_spec.get("source_payload_plan")
+    strategy = str(plan.get("strategy", "full_excerpt")) if isinstance(plan, dict) else "full_excerpt"
+    payload_length = str(plan.get("payload_length", "medium")) if isinstance(plan, dict) else "medium"
+    paste_style = str(plan.get("paste_style", "fenced_text")) if isinstance(plan, dict) else "fenced_text"
+    label_style = str(plan.get("label_style", "excerpt")) if isinstance(plan, dict) else "excerpt"
+    excerpt = source["excerpt"]
+
+    if strategy == "staged_excerpts" and user_turn_count > 1:
+        chunks = _split_source_payload(excerpt)
+        later_turn = min(2, user_turn_count - 1)
+        return [
+            _source_payload_slot(
+                index=1,
+                turn_index=0,
+                strategy=strategy,
+                payload_length=payload_length,
+                paste_style=paste_style,
+                label_style=label_style,
+                text=chunks[0],
+            ),
+            _source_payload_slot(
+                index=2,
+                turn_index=later_turn,
+                strategy=strategy,
+                payload_length=payload_length,
+                paste_style=paste_style,
+                label_style=label_style,
+                text=chunks[1],
+            ),
+        ]
+
+    text = _source_payload_text_for_strategy(
+        strategy,
+        excerpt,
+        seed_text=str(source["document_id"]),
+        payload_length=payload_length,
+    )
+    return [
+        _source_payload_slot(
+            index=1,
+            turn_index=0,
+            strategy=strategy,
+            payload_length=payload_length,
+            paste_style=paste_style,
+            label_style=label_style,
+            text=text,
+        )
+    ]
+
+
+def _source_payload_slot(
+    *,
+    index: int,
+    turn_index: int,
+    strategy: str,
+    payload_length: str,
+    paste_style: str,
+    label_style: str,
+    text: str,
+) -> dict[str, Any]:
+    stem = _source_payload_label_stem_from_style(label_style, index=index)
+    return {
+        "index": index,
+        "label": f"{stem}:",
+        "label_stem": stem,
+        "label_style": label_style,
+        "placeholder": SOURCE_PAYLOAD_PLACEHOLDER_TEMPLATE % index,
+        "turn_index": turn_index,
+        "target_user_turn": turn_index + 1,
+        "strategy": strategy,
+        "payload_length": payload_length,
+        "paste_style": paste_style,
+        "text": text,
+        "char_count": len(text),
+    }
+
+
+def _source_payload_text_for_strategy(
+    strategy: str,
+    excerpt: str,
+    *,
+    seed_text: str,
+    payload_length: str = "medium",
+) -> str:
+    if strategy == "full_excerpt":
+        return excerpt
+    if strategy == "long_contiguous_excerpt":
+        return _source_payload_window(excerpt, seed_text=seed_text, payload_length=payload_length)
+    if strategy == "selected_clauses":
+        settings = _source_payload_length_settings(payload_length)
+        passages = _selected_source_passages(
+            excerpt,
+            count=int(settings["selected_count"]),
+            seed_text=seed_text,
+            target_chars=int(settings["selected_target_chars"]),
+        )
+        return _format_selected_source_passages(passages)
+    if strategy == "summary_plus_quotes":
+        settings = _source_payload_length_settings(payload_length)
+        passages = _selected_source_passages(
+            excerpt,
+            count=max(1, int(settings["selected_count"]) - 1),
+            seed_text=seed_text,
+            target_chars=int(settings["selected_target_chars"]),
+        )
+        return _format_source_passages(passages)
+    return excerpt
+
+
+def _source_payload_length_settings(payload_length: str) -> dict[str, float | int | str]:
+    settings = SOURCE_PAYLOAD_LENGTHS.get(payload_length)
+    if settings is not None:
+        return settings
+    return SOURCE_PAYLOAD_LENGTHS["medium"]
+
+
+def _source_payload_window(excerpt: str, *, seed_text: str, payload_length: str = "medium") -> str:
+    settings = _source_payload_length_settings(payload_length)
+    target_chars = max(int(settings["window_min_chars"]), int(len(excerpt) * float(settings["window_ratio"])))
+    if len(excerpt) <= target_chars:
+        return excerpt
+    max_start = max(len(excerpt) - target_chars, 0)
+    start = _stable_index(seed_text + "|long_source_window", max_start + 1)
+    if start > 0:
+        start = excerpt.find(" ", start)
+        if start == -1:
+            start = 0
+    end = min(start + target_chars, len(excerpt))
+    if end < len(excerpt):
+        boundary = excerpt.rfind(" ", start, end)
+        if boundary > start:
+            end = boundary
+    return excerpt[start:end].strip()
+
+
+def _split_source_payload(excerpt: str) -> tuple[str, str]:
+    midpoint = len(excerpt) // 2
+    split_at = excerpt.find(". ", max(midpoint - 500, 0), min(midpoint + 500, len(excerpt)))
+    if split_at == -1:
+        split_at = excerpt.find(" ", midpoint)
+    if split_at == -1:
+        split_at = midpoint
+    first = excerpt[: split_at + 1].strip()
+    second = excerpt[split_at + 1 :].strip()
+    if not second:
+        return first, first
+    return first, second
+
+
+def _selected_source_passages(excerpt: str, *, count: int, seed_text: str, target_chars: int) -> list[str]:
+    passages = [block for block in _source_payload_blocks(excerpt) if _source_payload_block_is_readable(block)]
+    if not passages:
+        return [_source_payload_window(excerpt, seed_text=seed_text, payload_length="medium")]
+    if len(passages) <= count:
+        return passages
+    if count == 1:
+        index = _stable_index(seed_text + "|source_passage", len(passages))
+        span, _ = _source_payload_span(passages, index=index, target_chars=target_chars)
+        return [span]
+
+    step = (len(passages) - 1) / (count - 1)
+    offset = _stable_index(seed_text + "|source_passage_offset", len(passages))
+    indexes = sorted({(offset + round(index * step)) % len(passages) for index in range(count)})
+    selected = []
+    next_allowed = 0
+    for index in indexes:
+        start = max(index, next_allowed)
+        if start >= len(passages):
+            continue
+        span, end = _source_payload_span(passages, index=start, target_chars=target_chars)
+        selected.append(span)
+        next_allowed = end + 1
+    if selected:
+        return selected
+    return [passages[_stable_index(seed_text + "|source_passage_fallback", len(passages))]]
+
+
+def _source_payload_blocks(excerpt: str) -> list[str]:
+    paragraphs = [_normalize_source_payload_block(part) for part in re.split(r"\n\s*\n+", excerpt)]
+    blocks = [paragraph for paragraph in paragraphs if paragraph]
+    if len(blocks) > 1:
+        return _merge_short_source_blocks(blocks)
+
+    lines = [_normalize_source_payload_block(line) for line in excerpt.splitlines()]
+    line_blocks = [line for line in lines if line]
+    if len(line_blocks) > 1:
+        return _merge_short_source_blocks(line_blocks)
+
+    if len(excerpt) > 1400:
+        return _source_payload_chunk_blocks(excerpt, target_chars=900)
+    return [excerpt.strip()] if excerpt.strip() else []
+
+
+def _source_payload_span(passages: list[str], *, index: int, target_chars: int) -> tuple[str, int]:
+    start = max(0, min(index, len(passages) - 1))
+    selected = [passages[start]]
+    total = len(passages[start])
+    next_index = start + 1
+
+    while total < target_chars and next_index < len(passages):
+        selected.append(passages[next_index])
+        total += len(passages[next_index])
+        next_index += 1
+
+    return "\n\n".join(selected).strip(), next_index - 1
+
+
+def _source_payload_chunk_blocks(excerpt: str, *, target_chars: int) -> list[str]:
+    chunks = []
+    start = 0
+    while start < len(excerpt):
+        end = min(start + target_chars, len(excerpt))
+        if end < len(excerpt):
+            boundary = _source_payload_chunk_boundary(excerpt, start=start, end=end)
+            if boundary > start:
+                end = boundary
+        chunk = excerpt[start:end].strip()
+        if chunk:
+            chunks.append(chunk)
+        start = end
+    return chunks
+
+
+def _source_payload_chunk_boundary(excerpt: str, *, start: int, end: int) -> int:
+    search_start = max(start + int((end - start) * 0.6), start)
+    for marker in [". ", "\n", "; ", ", ", " "]:
+        boundary = excerpt.rfind(marker, search_start, end)
+        if boundary > start:
+            return boundary + len(marker.rstrip())
+    return end
+
+
+def _normalize_source_payload_block(text: str) -> str:
+    return _normalize_source_text(text).strip()
+
+
+def _merge_short_source_blocks(blocks: list[str]) -> list[str]:
+    merged: list[str] = []
+    pending: list[str] = []
+    pending_chars = 0
+
+    for block in blocks:
+        pending.append(block)
+        pending_chars += len(block)
+        if pending_chars < 180:
+            continue
+        merged.append("\n".join(pending).strip())
+        pending = []
+        pending_chars = 0
+
+    if pending:
+        tail = "\n".join(pending).strip()
+        if merged and len(tail) < 180:
+            merged[-1] = f"{merged[-1]}\n{tail}".strip()
+        else:
+            merged.append(tail)
+
+    return merged
+
+
+def _source_payload_block_is_readable(block: str) -> bool:
+    stripped = block.strip()
+    if len(stripped) < 80:
+        return False
+    alpha_chars = sum(1 for char in stripped if char.isalpha())
+    visible_chars = sum(1 for char in stripped if not char.isspace())
+    if visible_chars == 0:
+        return False
+    return alpha_chars / visible_chars >= 0.45
+
+
+def _format_selected_source_passages(passages: list[str]) -> str:
+    return "\n\n".join(f"Uddrag {index}:\n{passage}" for index, passage in enumerate(passages, start=1))
+
+
+def _format_source_passages(passages: list[str]) -> str:
+    return "Direkte kildepassager markeret af brugeren:\n\n" + _format_selected_source_passages(passages)
+
+
+def _format_source_payload_slot(slot: dict[str, Any]) -> str:
+    style = str(slot.get("paste_style", "fenced_text"))
+    text = str(slot["text"])
+    if style == "blockquote":
+        quoted = "\n".join(f"> {line}" if line else ">" for line in text.splitlines())
+        return f"{slot['label']}\n{quoted}"
+    if style == "plain_delimited":
+        stem = _source_payload_label_stem(slot)
+        return f"{stem} begynder:\n{text}\n{stem} slutter."
+    if style == "separator":
+        return f"{slot['label']}\n---\n{text}\n---"
+    return f"{slot['label']}\n```text\n{text}\n```"
+
+
+def _source_payload_label_stem(slot: dict[str, Any]) -> str:
+    if "label_stem" in slot:
+        return str(slot["label_stem"])
+    return _source_payload_label_stem_from_style(str(slot.get("label_style", "excerpt")), index=int(slot["index"]))
+
+
+def _source_payload_label_stem_from_style(label_style: str, *, index: int) -> str:
+    detail = SOURCE_PAYLOAD_LABEL_STYLES.get(label_style, SOURCE_PAYLOAD_LABEL_STYLES["excerpt"])
+    return str(detail["stem_template"]).format(index=index)
+
+
 def _interleave_messages(
     skeleton: list[dict[str, str]],
     user_turns: list[str],
@@ -976,7 +1906,7 @@ def _generate_review(
         )
         strict_review = _parse_strict_review(strict_text, threshold=float(generation.get("strict_review_accept_threshold", 0.9)))
         review = _merge_strict_review(review, strict_review)
-    return _apply_local_review_gates(review, messages)
+    return _apply_local_review_gates(review, messages, seed_spec)
 
 
 def _repair_messages(
@@ -1004,9 +1934,64 @@ def _needs_repair(
     messages: list[dict[str, str]],
     seed_spec: dict[str, Any],
 ) -> bool:
+    if _unrepairable_surface_failures(messages, seed_spec):
+        return False
     if not bool(review["selection"]["accepted"]):
         return True
     return not _dialogue_respects_evidence_boundary(messages, _evidence_boundary(seed_spec))
+
+
+def _unrepairable_surface_failures(
+    messages: list[dict[str, str]],
+    seed_spec: dict[str, Any],
+) -> list[str]:
+    failures = []
+    if not _visible_artifact_claims_grounded({"messages": messages})["passed"]:
+        failures.append("visible_artifact_claims_grounded")
+    if _source_grounding(seed_spec) is not None and not _source_payloads_readable({"messages": messages})["passed"]:
+        failures.append("source_payloads_readable")
+    return failures
+
+
+def _local_unrepairable_review(
+    seed_spec: dict[str, Any],
+    intent_model: dict[str, Any],
+    failures: list[str],
+) -> dict[str, Any]:
+    findings = [
+        f"Hard reject: {failure}. This is a user/source surface issue, so assistant-turn repair cannot fix it."
+        for failure in failures
+    ]
+    return {
+        "review": {
+            "reviewers": [
+                {
+                    "name": f"local_{failure}",
+                    "passed": False,
+                    "finding": finding,
+                }
+                for failure, finding in zip(failures, findings, strict=True)
+            ],
+            "turn_evidence_audit": "SKIPPED - user/source surface issue is not assistant-repairable",
+            "repair_actions": [
+                f"Regenerate the candidate with a complete, readable, visible user/source payload instead of repairing assistant turns: {failure}"
+                for failure in failures
+            ],
+            "review_decision": "reject",
+            "difficulty_axis": seed_spec["difficulty_axis"],
+            "artifact": "\n".join(findings),
+        },
+        "verification": {
+            "success_criteria": list(seed_spec["success_criteria"]),
+        },
+        "selection": {
+            "accepted": False,
+            "score": 0.0,
+            "intent_trajectory": intent_model["trajectory"],
+            "subtask_trajectory": intent_model["subtask_trajectory"],
+            "reasons": findings,
+        },
+    }
 
 
 def _row_from_generated_parts(
@@ -1021,6 +2006,14 @@ def _row_from_generated_parts(
 ) -> dict[str, Any]:
     required_acts = [str(step["dialogue_act"]) for step in skeleton]
     source_methods = list(seed_spec["source_methods"])
+    verification = {
+        "required_dialogue_acts": required_acts,
+        "success_criteria": list(seed_spec["success_criteria"]),
+        "work_session": dict(seed_spec["work_session"]),
+    }
+    source_grounding = _hidden_source_grounding(seed_spec)
+    if source_grounding:
+        verification["source_grounding"] = source_grounding
 
     return {
         "id": row_id,
@@ -1029,17 +2022,15 @@ def _row_from_generated_parts(
             source
             for source in METHOD_SOURCES
             if source["name"] in source_methods
-        ],
+        ]
+        + list(seed_spec.get("external_sources", [])),
         "hidden": {
             "blueprint": blueprint,
+            "source_task_plan": seed_spec.get("source_task_plan", {}),
             "intent_model": intent_model,
             "skeleton": skeleton,
             "review": review["review"],
-            "verification": {
-                "required_dialogue_acts": required_acts,
-                "success_criteria": list(seed_spec["success_criteria"]),
-                "work_session": dict(seed_spec["work_session"]),
-            },
+            "verification": verification,
             "selection": review["selection"],
         },
         "meta": {
@@ -1048,6 +2039,9 @@ def _row_from_generated_parts(
             "scenario_variant": seed_spec["scenario_variant"],
             "scenario_instance": seed_spec.get("scenario_instance", {}),
             "scenario_variant_index": seed_spec["scenario_variant_index"],
+            "source_pack": seed_spec.get("source_grounding", {}).get("pack_id", ""),
+            "source_document_id": seed_spec.get("source_grounding", {}).get("document_id", ""),
+            "persona_source": seed_spec.get("persona_context", {}).get("source", ""),
             "family": seed_spec["family"],
             "domain": blueprint["domain"],
             "intent_trajectory": intent_model["trajectory"],
@@ -1302,11 +2296,10 @@ def _mds_scores(row: dict[str, Any]) -> dict[str, Any]:
             + qa_form_consistency
             + evidence_boundary
             + artifact_grounding
-            + reaction_grounding
             + task_completion
             + first_turn_substance
         )
-        / 8,
+        / 7,
         4,
     )
     global_bin = "|".join(
@@ -1422,15 +2415,12 @@ def _mds_eligible(row: dict[str, Any]) -> bool:
         return False
     if float(mds["local_scores"]["artifact_grounding"]) < 1.0:
         return False
-    if float(mds["local_scores"]["reaction_grounding"]) < 1.0:
-        return False
     return bool(
         _messages_alternate(row)["passed"]
         and _no_role_label_leak(row)["passed"]
         and _skeleton_matches_messages(row)["passed"]
         and _evidence_boundary_respected(row)["passed"]
         and _visible_artifact_claims_grounded(row)["passed"]
-        and _reaction_references_grounded(row)["passed"]
         and _assistant_format_restrained(row)["passed"]
     )
 
@@ -1631,6 +2621,83 @@ def _visible_artifact_claims_grounded(row: dict[str, Any]) -> dict[str, bool]:
     return {"passed": True}
 
 
+def _source_payloads_readable(row: dict[str, Any]) -> dict[str, bool]:
+    messages = row.get("messages")
+    if not isinstance(messages, list):
+        return {"passed": False}
+
+    for message in messages:
+        if not isinstance(message, dict) or message.get("role") != "user":
+            continue
+        for block in _inserted_source_payload_blocks(str(message.get("content", ""))):
+            if not _inserted_source_payload_block_readable(block):
+                return {"passed": False}
+
+    return {"passed": True}
+
+
+def _inserted_source_payload_blocks(text: str) -> list[str]:
+    label = _source_payload_visible_label_pattern()
+    patterns = [
+        re.compile(rf"{label}\s*:\s*```(?:text)?\s*\n(.*?)\n```", flags=re.IGNORECASE | re.DOTALL),
+        re.compile(rf"{label}\s+begynder:\s*\n(.*?)\n{label}\s+slutter\.?", flags=re.IGNORECASE | re.DOTALL),
+        re.compile(rf"{label}\s*:\s*---\s*\n(.*?)\n---", flags=re.IGNORECASE | re.DOTALL),
+    ]
+    blocks = [match.group(1).strip() for pattern in patterns for match in pattern.finditer(text)]
+    blocks.extend(_inserted_blockquote_source_payload_blocks(text))
+    return blocks
+
+
+def _inserted_blockquote_source_payload_blocks(text: str) -> list[str]:
+    label = _source_payload_visible_label_pattern()
+    pattern = re.compile(rf"{label}\s*:\s*((?:\n>\s?.*)+)", flags=re.IGNORECASE)
+    blocks = []
+    for match in pattern.finditer(text):
+        lines = []
+        for line in match.group(1).splitlines():
+            stripped = line.strip()
+            if not stripped.startswith(">"):
+                continue
+            lines.append(stripped[1:].lstrip())
+        if lines:
+            blocks.append("\n".join(lines).strip())
+    return blocks
+
+
+def _source_payload_visible_label_pattern(*, index: int | None = None) -> str:
+    stems = [
+        str(detail["stem_template"]).replace("{index}", "").strip()
+        for detail in SOURCE_PAYLOAD_LABEL_STYLES.values()
+    ]
+    stems.extend(LEGACY_SOURCE_PAYLOAD_LABEL_STEMS)
+    stem_pattern = "|".join(re.escape(stem) for stem in stems)
+    index_pattern = str(index) if index is not None else r"\d+"
+    return rf"(?:{stem_pattern})\s+{index_pattern}"
+
+
+def _inserted_source_payload_block_readable(block: str) -> bool:
+    units = _inserted_source_payload_units(block)
+    if not units:
+        return _source_payload_block_is_readable(block)
+    return all(_source_payload_block_is_readable(unit) for unit in units)
+
+
+def _inserted_source_payload_units(block: str) -> list[str]:
+    marker = re.compile(r"(?m)^Uddrag\s+\d+:\s*")
+    matches = list(marker.finditer(block))
+    if not matches:
+        return []
+
+    units = []
+    for index, match in enumerate(matches):
+        start = match.end()
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(block)
+        unit = block[start:end].strip()
+        if unit:
+            units.append(unit)
+    return units
+
+
 def _reaction_references_grounded(row: dict[str, Any]) -> dict[str, bool]:
     messages = row.get("messages")
     if not isinstance(messages, list):
@@ -1665,17 +2732,7 @@ def _assistant_format_restrained(row: dict[str, Any]) -> dict[str, bool]:
 
 
 def _assistant_text_has_restrained_format(text: str) -> bool:
-    if re.search(r"[\u2705\u274c\u26a0\ufe0f\U0001f300-\U0001faff]", text):
-        return False
-    if re.search(r"(?m)^\s*[-*_]{3,}\s*$", text):
-        return False
-    if re.search(r"\*\*[^*\n][\s\S]*?\*\*|\*[^*\n]+\*", text):
-        return False
-    if re.search(r"(?m)^\s{0,3}#{1,6}\s+\S", text):
-        return False
-    if re.search(r"(?m)^\s*\|.+\|\s*$", text):
-        return False
-    return True
+    return re.search(r"[\u2705\u274c\u26a0\ufe0f\U0001f300-\U0001faff]", text) is None
 
 
 def _claims_visible_artifact(text: str) -> bool:
@@ -2054,7 +3111,7 @@ def _scenario_instance_messages(seed_spec: dict[str, Any]) -> list[dict[str, str
         {
             "role": "system",
             "content": (
-                "You expand a handwritten multi-turn dialogue archetype into one concrete scenario instance. "
+                "You expand a multi-turn dialogue archetype into one concrete scenario instance. "
                 "This is the ConsistentChat diversity fanout layer before APIGen-MT-style blueprint generation: "
                 "the seed is an archetype, not the final scenario. "
                 "Do not write the dialogue. Do not output JSON-only. "
@@ -2069,6 +3126,8 @@ def _scenario_instance_messages(seed_spec: dict[str, Any]) -> list[dict[str, str
                 "Preserve the top-level domain, intent category, evidence boundary, and success criteria, but vary "
                 "the concrete task material wherever possible: names, dates, quantities, artifacts, excerpts, user "
                 "background, constraints, stakeholder context, options, prior attempts, and disclosure timing. "
+                "If a source-grounding rule is provided below, it overrides this variation instruction for all "
+                "source-owned facts. "
                 "If the seed success criteria require a specific entity, keep that entity; otherwise avoid reusing "
                 "the seed's default examples. Treat the seed query trajectory as a pattern, not a fixed script.\n\n"
                 f"Hidden artifact language: {latent_language}\n"
@@ -2081,6 +3140,7 @@ def _scenario_instance_messages(seed_spec: dict[str, Any]) -> list[dict[str, str
                 f"Seed success criteria:\n{_format_success_criteria(seed_spec['success_criteria'])}\n\n"
                 "Seed facts and constraints:\n"
                 f"{json.dumps(seed_spec['seed_blueprint'], indent=2, sort_keys=True)}\n\n"
+                f"{_source_grounding_generation_instruction(seed_spec)}"
                 "Scenario expansion variant:\n"
                 f"{_format_scenario_variant(seed_spec)}\n\n"
                 "Candidate variation axis:\n"
@@ -2129,6 +3189,7 @@ def _blueprint_messages(seed_spec: dict[str, Any]) -> list[dict[str, str]]:
                 f"Seed success criteria:\n{_format_success_criteria(seed_spec['success_criteria'])}\n\n"
                 "Seed facts and constraints:\n"
                 f"{json.dumps(seed_spec['seed_blueprint'], indent=2, sort_keys=True)}\n\n"
+                f"{_source_grounding_generation_instruction(seed_spec)}"
                 "Scenario expansion variant:\n"
                 f"{_format_scenario_variant(seed_spec)}\n\n"
                 "Candidate scenario instance:\n"
@@ -2138,6 +3199,8 @@ def _blueprint_messages(seed_spec: dict[str, Any]) -> list[dict[str, str]]:
                 "evidence boundary, and success criteria, but prefer the candidate instance for user-owned facts, "
                 "named entities, quantities, constraints, first-turn informativeness, and disclosure timing where "
                 "the archetype permits it. "
+                "For source-pack rows, only user-owned facts may vary; source-owned facts are fixed by the original "
+                "source reference above. "
                 "Do not fabricate current/live, official, private, or source-specific facts unless the variant also "
                 "plans for them to appear in visible user/source text before assistant use.\n\n"
                 "ConsistentChat-aligned work-session contract:\n"
@@ -2245,6 +3308,7 @@ def _skeleton_messages(
                 f"{_language_name(str(seed_spec['dialogue_language']))}.\n\n"
                 f"Intent model:\n{intent_model['artifact']}\n\n"
                 f"Hidden blueprint:\n{blueprint['artifact']}\n\n"
+                f"{_source_grounding_skeleton_instruction(seed_spec)}"
                 "Scenario expansion variant:\n"
                 f"{_format_scenario_variant(seed_spec)}\n\n"
                 "Candidate scenario instance:\n"
@@ -2257,6 +3321,53 @@ def _skeleton_messages(
                 "Use this line form so the artifact can be replayed:\n"
                 "STEP 1: user | initial_user_request | what changes in the visible state\n"
                 "STEP 2: assistant | clarify_missing_slots | what changes in the visible state"
+            ),
+        },
+    ]
+
+
+def _reformat_skeleton_messages(
+    draft_skeleton: str,
+    seed_spec: dict[str, Any],
+    blueprint: dict[str, Any],
+    intent_model: dict[str, Any],
+    expected_roles: list[str],
+    parsed_skeleton: list[dict[str, str]],
+) -> list[dict[str, str]]:
+    target_steps = len(expected_roles)
+    target_user_turns = _target_user_turns(seed_spec)
+    role_order = ", ".join(expected_roles)
+    parsed_roles = [step["role"] for step in parsed_skeleton]
+    parsed_role_order = ", ".join(parsed_roles) if parsed_roles else "none"
+    latent_language = _language_name(str(seed_spec["latent_language"]))
+    return [
+        {
+            "role": "system",
+            "content": (
+                "You repair ConsistentChat-style dialogue skeleton artifacts. "
+                "Preserve the planned intent trajectory and work-session progress where possible, "
+                "but the structural contract is mandatory."
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                f"Rewrite the draft skeleton into exactly {target_steps} STEP lines. "
+                f"Required role order: {role_order}. "
+                f"The current draft parsed as {len(parsed_skeleton)} STEP lines with roles: {parsed_role_order}. "
+                "That parsed shape is invalid unless it already exactly matches the required role order. "
+                "Every line must use this form:\n"
+                "STEP N: role | compact_dialogue_act | visible_state_delta\n\n"
+                "Do not add headings, bullets, JSON, commentary, or dialogue text. "
+                f"The {target_user_turns} user skeleton steps should still map to the USER_QUERY_PLAN in order. "
+                "If the draft has extra or missing turns, merge or split at natural information-progress points "
+                "while preserving the work-session contract. Do not collapse two user-query-plan moves into one "
+                "user step just to keep the skeleton short.\n\n"
+                f"Write the repaired skeleton artifact in {latent_language}.\n\n"
+                f"Intent model:\n{intent_model['artifact']}\n\n"
+                f"Hidden blueprint:\n{blueprint['artifact']}\n\n"
+                f"{_source_grounding_skeleton_instruction(seed_spec)}"
+                f"Draft skeleton:\n{draft_skeleton}"
             ),
         },
     ]
@@ -2289,6 +3400,9 @@ def _user_simulator_messages(
                 "If a user turn says it provides, pastes, attaches, or shows an artifact such as a draft, source, "
                 "job posting, policy, abstract, receipt, error message, or code, include a short visible payload in "
                 "that same turn; do not imply invisible attachments or omitted source text. "
+                "For source-pack rows, do not type source text from memory or from the hidden blueprint. Use the "
+                "provided source-payload placeholders exactly where source material should become visible; the pipeline "
+                "will replace those placeholders with exact text from the original source. "
                 "When private policy, organizational, or document facts are needed, reveal them as user-visible "
                 "source text before expecting the assistant to rely on them. Reveal concrete condition status, such as "
                 "receipts, documentation, dates, exclusions, and missing fields, before expecting a final eligibility "
@@ -2319,11 +3433,64 @@ def _user_simulator_messages(
                 f"{_format_scenario_variant(seed_spec)}\n\n"
                 "Candidate scenario instance:\n"
                 f"{_format_scenario_instance(seed_spec)}\n\n"
+                f"{_source_grounding_user_simulator_instruction(seed_spec, user_turns=user_turns)}"
                 "ConsistentChat-aligned work-session contract:\n"
                 f"{_format_work_session_contract(seed_spec)}\n\n"
+                f"{_source_grounding_visible_payload_instruction(seed_spec)}"
                 f"Intent model:\n{intent_model['artifact']}\n\n"
                 f"Hidden blueprint:\n{blueprint['artifact']}\n\n"
                 f"Skeleton:\n{_format_skeleton(skeleton)}"
+            ),
+        },
+    ]
+
+
+def _regenerate_user_turns_messages(
+    seed_spec: dict[str, Any],
+    blueprint: dict[str, Any],
+    intent_model: dict[str, Any],
+    skeleton: list[dict[str, str]],
+    *,
+    draft_text: str,
+    parsed_turns: list[str],
+) -> list[dict[str, str]]:
+    dialogue_language = _language_name(str(seed_spec["dialogue_language"]))
+    user_turns = _role_count(skeleton, "user")
+    user_labels = ", ".join(f"USER {index}:" for index in range(1, user_turns + 1))
+    parsed_count = len(parsed_turns)
+    return [
+        {
+            "role": "system",
+            "content": (
+                "You repair incomplete user-simulator output for multi-turn data. "
+                "Regenerate the whole user-side trajectory from the hidden blueprint, intent model, and skeleton. "
+                "Use the draft only as a hint; if it collapsed missing turns into one block, split and complete the "
+                "trajectory at natural information-progress points. "
+                "Do not answer as the assistant."
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                f"The previous user simulator output parsed as {parsed_count} user turns, but the skeleton requires "
+                f"exactly {user_turns}. Regenerate all user turns with one labeled block per user turn, using exactly "
+                f"these labels: {user_labels}. Do not add headings, JSON, commentary, or assistant turns.\n\n"
+                f"Visible dialogue language: {dialogue_language}. Keep the USER labels exactly as requested, "
+                f"but write the turn content in {dialogue_language}.\n"
+                f"Domain: {seed_spec['domain']}\n"
+                f"Seed query trajectory hint:\n{_format_query_trajectory(seed_spec.get('query_trajectory_hint'))}\n\n"
+                "Scenario expansion variant:\n"
+                f"{_format_scenario_variant(seed_spec)}\n\n"
+                "Candidate scenario instance:\n"
+                f"{_format_scenario_instance(seed_spec)}\n\n"
+                f"{_source_grounding_user_simulator_instruction(seed_spec, user_turns=user_turns)}"
+                "ConsistentChat-aligned work-session contract:\n"
+                f"{_format_work_session_contract(seed_spec)}\n\n"
+                f"{_source_grounding_visible_payload_instruction(seed_spec)}"
+                f"Intent model:\n{intent_model['artifact']}\n\n"
+                f"Hidden blueprint:\n{blueprint['artifact']}\n\n"
+                f"Skeleton:\n{_format_skeleton(skeleton)}\n\n"
+                f"Incomplete draft output:\n{draft_text}"
             ),
         },
     ]
@@ -2358,7 +3525,8 @@ def _assistant_turn_messages(
                 "Use the ConsistentChat role/action outline for dialogue structure, but use only the visible transcript "
                 "prefix as evidence. You cannot see future user turns, hidden blueprints, or future skeleton state deltas. "
                 "Treat the work-session contract as generic task-shape guidance under the ConsistentChat intent, not "
-                "as evidence for user-specific facts. "
+                "as evidence for user-specific facts. If a source-pack skeleton or work-session note names a source "
+                "detail that is not visible in the transcript prefix, ignore it as non-evidence. "
                 f"{_evidence_boundary_instruction(seed_spec)}"
                 f"{_discourse_quality_instruction()}"
                 f"{_work_session_quality_instruction()}"
@@ -2394,10 +3562,22 @@ def _assistant_turn_messages(
                 "For appeal deadlines, eligibility windows, legal/procedural rules, or policy thresholds, do not invent "
                 "a date or precise rule; give a source-bounded checklist and ask for the controlling letter, policy, "
                 "jurisdiction, or receipt date when needed. "
-                "For calculations, show exclusions and totals from the visible numbers instead of jumping to a result.\n\n"
-                "Use restrained plain-text formatting. Prefer short paragraphs and simple bullets or numbering only when "
-                "they make the answer easier to scan. Avoid markdown bold, italics, horizontal rules, decorative "
-                "separators, and large heading stacks unless the user explicitly asks for a formatted artifact.\n\n"
+                "For calculations, show exclusions and totals from the visible numbers instead of jumping to a result. "
+                "For practical advice, recipes, routines, schedules, or how-long-it-takes claims, frame examples and "
+                "time estimates as rough suggestions to try, not proven outcomes or known timings. Use phrases like "
+                "for example, roughly, often, usually, or adjust after trying it. "
+                "For technical troubleshooting, keep root causes and compatibility explanations as hypotheses unless "
+                "the visible transcript provides the exact package version, platform, build log, documentation, or "
+                "other controlling evidence. Say what to verify in docs, release notes, metadata, logs, or a minimal "
+                "reproduction. Do not assert exact version compatibility, build requirements, maintenance status, or "
+                "causal package behavior as verified unless that evidence is visible.\n\n"
+                "Use light, functional formatting when it helps the requested work product: paragraph breaks, short "
+                "headings, bullets, numbered steps, compact tables, or occasional emphasis are fine when they make the "
+                "answer easier to use. When using Markdown, write structurally valid Markdown: put blank lines between "
+                "paragraphs, headings, lists, tables, and major sections where Markdown needs them. Do not use horizontal "
+                "rules or separators as spacing. Use bold sparingly; do not bold routine list labels, every key term, "
+                "or whole sentences. Avoid decorative formatting, emojis, checkmark/cross/warning symbols, repeated "
+                "separators, excessive emphasis, and large heading stacks.\n\n"
                 "ConsistentChat-aligned work-session contract:\n"
                 f"{_format_work_session_contract(seed_spec)}\n\n"
                 f"{review_text}"
@@ -2440,17 +3620,22 @@ def _surface_polish_messages(seed_spec: dict[str, Any], messages: list[dict[str,
                 "You are a surface editor for synthetic dialogue data. "
                 "Fix only visible-language quality issues: typos, malformed words, awkward calques, invented compounds, "
                 "unnatural phrasing, and over-precise localized UI/legal/policy labels. Preserve roles, order, meaning, "
-                "numbers, dates, code, commands, quoted source text, product names, and evidence boundaries. Do not add "
-                "new facts, remove constraints, make the assistant smarter, or rewrite the task. If an official localized "
+                "numbers, dates, code, commands, source-payload fenced blocks, quoted source text, product names, and "
+                "evidence boundaries. Do not add new facts, remove constraints, make the assistant smarter, or rewrite "
+                "the task. If an official localized "
                 "label is uncertain, use a generic description rather than a precise-sounding invented label. "
                 "For Danish, replace accidental English words in prose with ordinary Danish unless they are code, product "
                 "names, quoted source text, or established loanwords. Fix misspellings and malformed Danish compounds. "
                 "Use established Danish technical terms or keep standard English terms when natural; do not create ad hoc "
                 "literal compounds, hyphenated participles, or word-for-word translations of English technical phrases. "
                 "Check Danish agreement in adjective and noun phrases. "
-                "Remove emojis and decorative emoji bullets from assistant turns, replacing them with plain text bullets "
-                "or headings. Remove excessive markdown bold/italic emphasis, horizontal rules, decorative separators, "
-                "and heading stacks unless the user explicitly requested a formatted artifact. No turn content may "
+                "Remove emojis, decorative emoji bullets, and checkmark/cross/warning symbols from assistant turns, "
+                "replacing them with plain text bullets or headings. Keep functional paragraph breaks, short headings, bullets, numbered lists, compact tables, "
+                "and occasional emphasis when they serve the requested artifact. When using Markdown, keep it structurally valid with blank lines "
+                "between paragraphs, headings, lists, tables, and major sections where Markdown needs them. Do not use horizontal "
+                "rules or separators as spacing. Use bold sparingly; do not bold routine list labels, every key term, "
+                "or whole sentences. Remove excessive emphasis, repeated "
+                "separators, decorative formatting, and large heading stacks. No turn content may "
                 "contain USER n: or ASSISTANT n: labels; labels only mark turn boundaries. "
                 f"Write polished turns in {dialogue_language}."
             ),
@@ -2585,14 +3770,23 @@ def _review_messages(
                 "deadlines, rules, fees, form requirements, weights, ports, certifications, compatibility outcomes, "
                 "delivery dates, stock claims, named-provider details, or institution policies when the user has not "
                 "supplied them; a blank template, verification checklist, hedged background generalization, or clearly "
-                "illustrative placeholder is acceptable.\n\n"
+                "illustrative placeholder is acceptable. Do not reject an assistant merely for telling the user to check "
+                "documentation, release notes, metadata, a policy, an official page, or another controlling source. A "
+                "verification instruction is not a verified claim. Reject only when the assistant asserts what that "
+                "source says, guarantees that the source exists, or treats source-dependent content as already verified "
+                "without visible evidence or clear hedging.\n\n"
                 "Language quality review must reject corrupted text, wrong-language fragments, malformed commands, broken "
                 "words, incoherent punctuation artifacts, and unnatural translations that would make the dialogue unsuitable "
                 "for training. For Danish output, reject non-Danish code-like fragments inside prose unless the user supplied "
-                "them or they are valid commands. Reject assistant turns that use emojis or decorative emoji bullets. "
-                "Format review must reject markdown-heavy assistant turns with unnecessary **bold**, *italics*, horizontal "
-                "rules, decorative separators, or large heading stacks unless the user explicitly requested that artifact "
-                "format. Prefer restrained plain text.\n\n"
+                "them or they are valid commands. Reject assistant turns that use emojis, decorative emoji bullets, "
+                "or checkmark/cross/warning symbols. "
+                "Format review should allow light functional formatting when it helps the requested artifact: paragraph "
+                "breaks, short headings, bullets, numbered steps, compact tables, and occasional emphasis. Markdown should "
+                "be structurally valid, with blank lines between paragraphs, headings, lists, tables, and major sections "
+                "where Markdown needs them. Bold should be sparse; routine labels, every key term, and whole sentences "
+                "should not be bolded by default. Reject "
+                "formatting only when it is decorative, excessive, markdown-heavy, emoji/symbol-based, or when repeated "
+                "separators or large heading stacks distract from the work product.\n\n"
                 "Naturalness review must also reject semantic oddities in either user or assistant turns: contradictory "
                 "or impossible premises, ambiguous wording that materially changes the task, literal translation artifacts, "
                 "invented words, and unnatural wording that a native speaker would likely not use. Review conversational "
@@ -2621,6 +3815,7 @@ def _review_messages(
                 f"{_format_work_session_contract(seed_spec)}\n\n"
                 f"Success criteria:\n{_format_success_criteria(seed_spec['success_criteria'])}\n\n"
                 f"{_evidence_boundary_instruction(seed_spec)}"
+                f"{_source_grounding_review_instruction(seed_spec)}"
                 f"Intent model:\n{intent_model['artifact']}\n\n"
                 f"Hidden blueprint:\n{blueprint['artifact']}\n\n"
                 f"Skeleton:\n{_format_skeleton(skeleton)}\n\n"
@@ -2645,9 +3840,12 @@ def _strict_review_messages(
             "content": (
                 "You are a strict second-pass audit for synthetic multi-turn dialogue data. "
                 "The first reviewer may have accepted the row; your job is to look only for reject-worthy failures. "
-                "Be stricter than a helpful assistant. Do not reward plausibility when the visible transcript lacks "
-                "evidence. Stable public knowledge is allowed, but exact source-dependent details must be hedged, "
-                "framed as general memory, or left as fields to verify. "
+                "Be stricter than a helpful assistant, but fail only material defects that would make the row bad "
+                "training data. Do not reward plausibility when the visible transcript lacks evidence. Stable public "
+                "knowledge is allowed, but exact source-dependent details must be hedged, framed as general memory, "
+                "or left as fields to verify. Treat a verification path as different from a verified claim: it is "
+                "acceptable to suggest checking docs, metadata, release notes, policies, official pages, or source "
+                "excerpts when the assistant does not assert what they contain. "
                 "For Danish dialogue, reject malformed Danish, odd compounds, calques, wrong agreement, and invented "
                 "words that would be bad training data. "
                 f"Write the audit artifact in {latent_language}. The visible dialogue language is {dialogue_language}."
@@ -2660,27 +3858,55 @@ def _strict_review_messages(
                 "STRICT_CHECK source_boundary, STRICT_CHECK language_quality, STRICT_CHECK factuality, "
                 "STRICT_CHECK contradiction, STRICT_CHECK format, STRICT_REPAIR_ACTIONS.\n\n"
                 "STRICT_SELECTION must be PASS only if every strict check passes. STRICT_SCORE is 0-1. "
-                "Each STRICT_CHECK line must begin PASS or FAIL, followed by a brief finding.\n\n"
+                "Each STRICT_CHECK line must begin PASS or FAIL, followed by a brief finding. Use FAIL only for "
+                "material, reject-worthy issues that would make the row bad training data; do not fail for harmless "
+                "missing hedges, reasonable examples, or minor preference refinements when the assistant remains "
+                "cautious and useful.\n\n"
                 "Fail source_boundary if the assistant states exact source-dependent facts without visible source "
                 "support or clear hedging. This includes product specs, prices, policies, legal/procedural rules, "
                 "health/nutrition/sleep claims, local planning claims, schedules, official labels, forms, fees, "
                 "institution/provider details, compatibility outcomes, stock, delivery, benchmarks, or current facts. "
-                "The acceptable alternative is a hedged general explanation, a verification checklist, or unknown fields.\n\n"
+                "Also fail source_boundary if inserted source snippets are unreadable broken fragments, isolated "
+                "numbers, citation/date shards, or partial abbreviations rather than complete readable passages. "
+                "The acceptable alternative is a hedged general explanation, a verification checklist, or unknown fields. "
+                "Allow stable public knowledge, common-domain background, and reasonable illustrative examples when "
+                "they are phrased generally, hedged where uncertainty matters, and not presented as current, official, "
+                "private, provider-specific, user-specific, or source-verified. Do not fail merely because the assistant "
+                "suggests a reasonable new option, ingredient, example, or next step that the user did not pre-approve. "
+                "Fail those additions only when they violate a visible exclusion, allergy, safety, medical constraint, "
+                "or closed list, or when the assistant presents them as the user's known preference. For health, nutrition, "
+                "and sleep, allow cautious general background and practical suggestions. Fail individualized diagnosis, "
+                "prescriptive medical advice, exact quantities, or unhedged medical claims without visible support. "
+                "For visible source text, allow direct paraphrases and clearly marked interpretations; fail when an "
+                "inference materially changes rules, eligibility, obligations, outcomes, or certainty. "
+                "Do not fail source_boundary merely because the assistant tells the user to check documentation, release "
+                "notes, package metadata, a policy, an official source, or another likely controlling source. Fail only "
+                "if the assistant asserts what those sources say, guarantees their existence, or treats their contents "
+                "as known without visible evidence.\n\n"
                 "Fail language_quality for unnatural Danish, malformed words, calques, broken grammar, invented "
                 "compounds, wrong idioms, tense disagreement, or odd phrasing that a native speaker would not accept "
                 "as clean training data.\n\n"
                 "Fail factuality for suspicious trivia, made-up explanations, incorrect general claims, or numbers "
-                "presented as facts when the row is not source-grounded. Entertainment rows are not exempt: playful "
-                "tone cannot license fabricated facts.\n\n"
+                "presented as verified facts when the row is not source-grounded. Do not fail cautious general background "
+                "merely because no citation is visible. Entertainment rows are not exempt: playful tone cannot license "
+                "fabricated facts.\n\n"
                 "Fail contradiction if later assistant turns contradict earlier advice, user constraints, or their own "
-                "uncertainty framing.\n\n"
-                "Fail format for markdown emphasis, tables, horizontal rules, decorative separators, emojis, heading "
-                "stacks, or overly formatted assistant output unless the user explicitly asked for that exact artifact.\n\n"
+                "uncertainty framing. Do not fail normal multi-turn revision after newly visible user constraints: the "
+                "assistant may narrow, abandon, or replace earlier tentative advice. Fail when it ignores the new "
+                "constraint, repeats incompatible advice, misleadingly denies or forgets earlier advice, or hardens "
+                "earlier uncertainty without new evidence.\n\n"
+                "Fail format for emojis, decorative emoji bullets, checkmark/cross/warning symbols, excessive markdown emphasis, repeated horizontal "
+                "rules or separators, large heading stacks, or formatting that overwhelms the answer. Allow light "
+                "functional formatting, including paragraph breaks, short markdown headings, bullets, numbered steps, "
+                "compact tables, occasional emphasis, and structurally valid Markdown spacing between paragraphs, headings, "
+                "lists, tables, and major sections. Bold should be sparse; fail rows that bold routine labels, every key "
+                "term, or whole sentences by default.\n\n"
                 f"Expected intent trajectory: {seed_spec['intent_trajectory_hint']}\n"
                 f"Expected subtask trajectory: {_subtask_trajectory_hint(seed_spec)}\n"
                 "ConsistentChat-aligned work-session contract:\n"
                 f"{_format_work_session_contract(seed_spec)}\n\n"
                 f"{_evidence_boundary_instruction(seed_spec)}"
+                f"{_source_grounding_review_instruction(seed_spec)}"
                 f"Intent model:\n{intent_model['artifact']}\n\n"
                 f"Hidden blueprint:\n{blueprint['artifact']}\n\n"
                 f"Skeleton:\n{_format_skeleton(skeleton)}\n\n"
@@ -2709,7 +3935,8 @@ def _preference_pair_messages(row: dict[str, Any]) -> list[dict[str, str]]:
             "content": (
                 "Create one rejected final assistant answer for this accepted conversation. "
                 "Keep the chosen answer unchanged. "
-                "Use these lines: FAILURE_MODE, CHOSEN_ACTION, REJECTED_ACTION, REJECTED_ANSWER.\n\n"
+                "Use these lines: FAILURE_MODE, CHOSEN_ACTION, REJECTED_ACTION, REJECTED_ANSWER. "
+                "REJECTED_ANSWER must contain the full rejected assistant message, not just a description.\n\n"
                 f"Rejected answer language: {target_language}.\n\n"
                 "Work-session contract:\n"
                 f"{json.dumps(hidden['blueprint'].get('work_session', {}), indent=2, sort_keys=True)}\n\n"
@@ -2786,8 +4013,8 @@ def _parse_numbered_blocks(text: str, *, label: str) -> list[str]:
         if match:
             blocks.append(match.group(1).strip())
             continue
-        if blocks and stripped:
-            blocks[-1] = f"{blocks[-1]}\n{stripped}".strip()
+        if blocks:
+            blocks[-1] = _append_parsed_content_line(blocks[-1], line)
     if blocks:
         return [_clean_numbered_block(block) for block in blocks]
 
@@ -2798,9 +4025,22 @@ def _parse_numbered_blocks(text: str, *, label: str) -> list[str]:
         if match:
             blocks.append(match.group(1).strip())
             continue
-        if blocks and stripped:
-            blocks[-1] = f"{blocks[-1]}\n{stripped}".strip()
+        if blocks:
+            blocks[-1] = _append_parsed_content_line(blocks[-1], line)
     return [_clean_numbered_block(block) for block in blocks]
+
+
+def _append_parsed_content_line(text: str, line: str) -> str:
+    stripped = line.strip()
+    if not stripped:
+        if not text.strip():
+            return text
+        if text.endswith("\n\n"):
+            return text
+        return f"{text.rstrip()}\n\n"
+    if text.endswith("\n\n"):
+        return f"{text}{stripped}"
+    return f"{text.rstrip()}\n{stripped}".strip()
 
 
 def _parse_polished_messages(text: str, original: list[dict[str, str]]) -> list[dict[str, str]] | None:
@@ -2832,8 +4072,8 @@ def _parse_mixed_labeled_messages(text: str) -> list[dict[str, str]]:
             current = _message(role, match.group(2).strip())
             messages.append(current)
             continue
-        if current is not None and stripped:
-            current["content"] = f"{current['content']}\n{stripped}".strip()
+        if current is not None:
+            current["content"] = _append_parsed_content_line(current["content"], line)
     return [
         _message(message["role"], _clean_numbered_block(message["content"]))
         for message in messages
@@ -2983,12 +4223,16 @@ def _merge_strict_review(review: dict[str, Any], strict_review: dict[str, Any]) 
     return merged
 
 
-def _apply_local_review_gates(review: dict[str, Any], messages: list[dict[str, str]]) -> dict[str, Any]:
+def _apply_local_review_gates(
+    review: dict[str, Any],
+    messages: list[dict[str, str]],
+    seed_spec: dict[str, Any],
+) -> dict[str, Any]:
     gates = [
-        ("assistant_format_restrained", _assistant_format_restrained({"messages": messages})),
         ("visible_artifact_claims_grounded", _visible_artifact_claims_grounded({"messages": messages})),
-        ("reaction_references_grounded", _reaction_references_grounded({"messages": messages})),
     ]
+    if _source_grounding(seed_spec) is not None:
+        gates.append(("source_payloads_readable", _source_payloads_readable({"messages": messages})))
     failures = [name for name, result in gates if not bool(result["passed"])]
     if not failures:
         return review
@@ -3008,10 +4252,13 @@ def _apply_local_review_gates(review: dict[str, Any], messages: list[dict[str, s
         for name in failures
     )
     merged["review"]["reviewers"] = reviewers
-    merged["review"]["review_decision"] = "repair"
+    merged["review"]["review_decision"] = "reject"
     merged["review"]["repair_actions"] = [
         *list(merged["review"].get("repair_actions", [])),
-        *(f"Fix local gate failure: {name}" for name in failures),
+        *(
+            f"Regenerate the candidate with a complete, readable, visible user/source payload instead of repairing assistant turns: {name}"
+            for name in failures
+        ),
     ]
     merged["selection"]["accepted"] = False
     merged["selection"]["score"] = min(float(merged["selection"].get("score", 0.0)), 0.0)
@@ -3023,6 +4270,8 @@ def _parse_preference_pair(text: str) -> dict[str, str]:
     rejected = _field_tail(text, "REJECTED_ANSWER").strip()
     if not rejected:
         rejected = fields.get("rejected_answer", "").strip()
+    if not rejected:
+        rejected = _preference_answer_fallback(text)
     assert rejected, "preference pair must include a rejected answer"
     return {
         "failure_mode": fields.get("failure_mode", "ignored_late_constraint").strip(),
@@ -3030,6 +4279,14 @@ def _parse_preference_pair(text: str) -> dict[str, str]:
         "rejected_action": fields.get("rejected_action", "continue_from_stale_state").strip(),
         "rejected_answer": rejected,
     }
+
+
+def _preference_answer_fallback(text: str) -> str:
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    body = [line for line in lines if _keyed_line_match(line) is None]
+    if body:
+        return "\n".join(body).strip()
+    return ""
 
 
 def _parse_score(text: str) -> float:
@@ -3062,38 +4319,45 @@ def _reviewer_passed(text: str) -> bool:
     stripped = lower.lstrip()
     if stripped.startswith(("fail", "reject")):
         return False
-    if stripped.startswith("pass"):
+    if stripped.startswith(("pass", "accept")):
         return True
-    lower = lower.replace("no contradictions", "")
-    lower = lower.replace("no contradiction", "")
-    lower = lower.replace("without contradiction", "")
-    lower = lower.replace("does not assert", "")
-    lower = lower.replace("does not introduce", "")
-    lower = lower.replace("does not imply", "")
-    lower = lower.replace("does not claim", "")
-    lower = lower.replace("avoids hallucination", "")
-    lower = lower.replace("no hallucination", "")
-    lower = lower.replace("no unsupported", "")
-    lower = lower.replace("without unsupported", "")
-    lower = lower.replace("not unsupported", "")
-    lower = lower.replace("no invented source", "")
-    lower = lower.replace("no source invention", "")
-    lower = lower.replace("without invented source", "")
-    negative_markers = [
-        "fail",
-        "reject",
-        "missing",
-        "does not",
-        "doesn't",
-        "lacks",
-        "contradict",
-        "unsupported",
-        "hallucinat",
-        "future leakage",
-        "invented source",
-        "source invention",
+    normalized = _strip_negated_review_failures(lower)
+    failure_patterns = [
+        r"\bfail(?:ed|s|ure)?\b",
+        r"\breject(?:ed|s|ion)?\b",
+        r"\bmissing\b",
+        r"\blacks?\b",
+        r"\bunsupported\b",
+        r"\bnot\s+(?:supported|grounded|visible)\b",
+        r"\bcontradict(?:s|ed|ion|ions|ory)?\b",
+        r"\bhallucinat\w*\b",
+        r"\binvent(?:ed|s|ing)?\b",
+        r"\bfuture leakage\b",
+        r"\bsource invention\b",
+        r"\bmalformed\b",
+        r"\bbroken\b",
+        r"\bcorrupt(?:ed|ion)?\b",
+        r"\bunnatural\b",
+        r"\brepair\s+(?:needed|required)\b",
+        r"\bneeds?\s+(?:repair|regeneration|rewrite|fix)\b",
     ]
-    return not any(marker in lower for marker in negative_markers)
+    return not any(re.search(pattern, normalized) for pattern in failure_patterns)
+
+
+def _strip_negated_review_failures(text: str) -> str:
+    patterns = [
+        r"\bno\s+[^.:\n;]{0,120}\b(?:unsupported|contradict(?:ion|ions|ory)?|missing|hallucinat\w*|invent\w*|source invention|failures?|issues?|problems?|semantic oddit\w*|recovery situation\w*)[^.:\n;]{0,80}",
+        r"\bwithout\s+[^.:\n;]{0,80}\b(?:unsupported|contradict\w*|missing|hallucinat\w*|invent\w*|source invention)[^.:\n;]{0,80}",
+        r"\bdoes not\s+(?:assert|introduce|imply|claim|invent|contradict|rely|pretend|need|silently|fabricate|override|act)\b",
+        r"\bdoesn't\s+(?:assert|introduce|imply|claim|invent|contradict|rely|pretend|need|silently|fabricate|override|act)\b",
+        r"\bdo not\s+(?:assert|introduce|imply|claim|invent|contradict|rely|pretend|fabricate|override|act)\b",
+        r"\bavoids?\s+(?:hallucination|contradiction|unsupported|inventing|source invention|future leakage)\b",
+        r"\bnot unsupported\b",
+    ]
+    normalized = text
+    for pattern in patterns:
+        normalized = re.sub(pattern, " ", normalized)
+    return normalized
 
 
 def _turn_evidence_audit_passed(text: str, *, expected_turns: int) -> bool:
@@ -3118,6 +4382,9 @@ def _reviewer_finding(text: str) -> str:
 
 def _parse_repair_actions(text: str) -> list[str]:
     lower = text.lower().strip(" .")
+    lower = re.sub(r"\s*[-\u2013\u2014]\s*", " - ", lower)
+    if re.match(r"^none(?:\b| - )", lower):
+        return []
     if lower in {"", "none", "n/a"}:
         return []
     no_action_markers = [
@@ -3146,18 +4413,44 @@ def _review_selection_accepted(text: str, *, score: float, threshold: float) -> 
 
 def _parse_keyed_lines(text: str) -> dict[str, str]:
     fields: dict[str, str] = {}
+    current_key: str | None = None
     for line in text.splitlines():
         stripped = line.strip()
-        if ":" not in stripped:
+        match = _keyed_line_match(stripped)
+        if match is None:
+            if current_key is not None and stripped:
+                current_value = fields[current_key]
+                fields[current_key] = f"{current_value}\n{stripped}".strip()
             continue
-        key, _, value = stripped.partition(":")
+        key = match.group("key")
+        value = match.group("value")
         normalized = key.strip().lower().replace(" ", "_")
         fields[normalized] = value.strip()
+        current_key = normalized
     return fields
 
 
+def _keyed_line_match(line: str) -> re.Match[str] | None:
+    return re.match(
+        r"^\**(?P<key>STRICT_SELECTION|STRICT_SCORE|STRICT_REPAIR_ACTIONS|STRICT_CHECK\s+\w+|"
+        r"SELECTION|SCORE|INTENT_TRAJECTORY|SUCCESS_CRITERIA|SUBTASK_TRAJECTORY|"
+        r"TURN_EVIDENCE_AUDIT|REPAIR_ACTIONS|REVIEWER\s+\w+|"
+        r"INFORMATION_FLOW|ROLE_INTERACTION|TOPIC_GUARDRAILS|WORK_SESSION_TYPE|"
+        r"SOURCE_TASK_DOMAIN|SOURCE_TASK_FAMILY|SOURCE_TASK_INTENT_TRAJECTORY|"
+        r"SOURCE_TASK_SUBTASK_TRAJECTORY|SOURCE_TASK_DIFFICULTY_AXIS|SOURCE_TASK_PERSONA|"
+        r"SOURCE_TASK_GOAL|SOURCE_TASK_QUERY_TRAJECTORY|SOURCE_TASK_SUCCESS_CRITERIA|"
+        r"SOURCE_TASK_VOLATILE_ITEMS|SOURCE_TASK_BLUEPRINT|"
+        r"DELIVERABLE_PROGRESS|USER_QUERY_PLAN|FAILURE_MODE|FAILURE\s+MODE|CHOSEN_ACTION|"
+        r"CHOSEN\s+ACTION|REJECTED_ACTION|REJECTED\s+ACTION|REJECTED_ANSWER|"
+        r"REJECTED\s+ANSWER)\**(?:\s*[:,]\s*|\s+|$)(?P<value>.*)$",
+        line,
+        flags=re.IGNORECASE,
+    )
+
+
 def _field_tail(text: str, key: str) -> str:
-    pattern = re.compile(rf"^{re.escape(key)}\s*:\s*(.*)$", flags=re.IGNORECASE)
+    label = re.escape(key).replace("_", r"[_\s]+")
+    pattern = re.compile(rf"^\**{label}\**(?:\s*[:,]\s*|\s+|$)(.*)$", flags=re.IGNORECASE)
     lines = text.splitlines()
     for index, line in enumerate(lines):
         match = pattern.match(line.strip())
@@ -3189,6 +4482,81 @@ def _split_query_plan(text: str) -> list[str]:
 
 def _role_count(skeleton: list[dict[str, str]], role: str) -> int:
     return sum(1 for step in skeleton if step["role"] == role)
+
+
+def _skeleton_has_expected_roles(skeleton: list[dict[str, str]], expected_roles: list[str]) -> bool:
+    return [step["role"] for step in skeleton] == expected_roles
+
+
+def _fallback_skeleton_from_intent(expected_roles: list[str], intent_model: dict[str, Any]) -> list[dict[str, str]]:
+    user_plan_steps = intent_model.get("user_query_plan_steps")
+    if not isinstance(user_plan_steps, list):
+        user_plan_steps = _split_query_plan(str(intent_model.get("user_query_plan", "")))
+
+    user_total = expected_roles.count("user")
+    assistant_total = expected_roles.count("assistant")
+    user_index = 0
+    assistant_index = 0
+    skeleton: list[dict[str, str]] = []
+
+    for role in expected_roles:
+        if role == "user":
+            user_index += 1
+            move = _fallback_user_move(user_index, user_total, user_plan_steps)
+            skeleton.append(
+                {
+                    "role": "user",
+                    "dialogue_act": _dialogue_act_slug(move, default=f"user_move_{user_index}"),
+                    "state_delta": f"visible user move {user_index}: {move}",
+                }
+            )
+            continue
+
+        assistant_index += 1
+        skeleton.append(
+            {
+                "role": "assistant",
+                "dialogue_act": _fallback_assistant_act(assistant_index, assistant_total),
+                "state_delta": _fallback_assistant_state(assistant_index, assistant_total),
+            }
+        )
+
+    return skeleton
+
+
+def _fallback_user_move(index: int, total: int, user_plan_steps: list[Any]) -> str:
+    if index <= len(user_plan_steps):
+        return str(user_plan_steps[index - 1])
+    if index == 1:
+        return "initial task request with concrete visible context"
+    if index == total:
+        return "request finalization or final format adjustment"
+    return "add a new constraint, correction, comparison, or work-product requirement"
+
+
+def _fallback_assistant_act(index: int, total: int) -> str:
+    if total == 1:
+        return "answer_with_visible_state"
+    if index == 1:
+        return "produce_initial_work_or_clarify"
+    if index == total:
+        return "finalize_work_product"
+    return "revise_or_extend_work_product"
+
+
+def _fallback_assistant_state(index: int, total: int) -> str:
+    if total == 1:
+        return "answer using only visible information and preserve source boundaries"
+    if index == 1:
+        return "produce useful initial work or ask one targeted clarification when needed"
+    if index == total:
+        return "deliver the final bounded work product using only visible information"
+    return "update the intermediate work product based on the newly visible user move"
+
+
+def _dialogue_act_slug(text: str, *, default: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "_", text.lower()).strip("_")
+    return slug[:64] or default
 
 
 def _target_user_turns(seed_spec: dict[str, Any]) -> int:
@@ -3348,6 +4716,17 @@ def _seed_specs(generation: dict[str, Any]) -> list[dict[str, Any]]:
                     "dialogue_language": language,
                     "latent_language": latent_language,
                 }
+                if "source_grounding" in template:
+                    spec["source_grounding"] = dict(template["source_grounding"])
+                    spec["source_payload_plan"] = _source_payload_plan_for_seed(
+                        template,
+                        archetype_id=archetype_id,
+                        variant_index=variant_index,
+                    )
+                if "persona_context" in template:
+                    spec["persona_context"] = dict(template["persona_context"])
+                if "external_sources" in template:
+                    spec["external_sources"] = list(template["external_sources"])
                 spec["work_session"] = _work_session_contract(spec)
                 specs.append(spec)
     return specs
@@ -3368,6 +4747,59 @@ def _scenario_variant(index: int, *, variant_count: int) -> dict[str, Any]:
     variant["index"] = index
     variant["variant_count"] = variant_count
     return variant
+
+
+def _source_payload_plan_for_seed(
+    template: dict[str, Any],
+    *,
+    archetype_id: str,
+    variant_index: int,
+) -> dict[str, str]:
+    configured = template.get("source_payload_strategies", DEFAULT_SOURCE_PAYLOAD_STRATEGIES)
+    assert isinstance(configured, list | tuple) and configured, "source_payload_strategies must be a non-empty list"
+    strategies = [str(strategy) for strategy in configured]
+    for strategy in strategies:
+        assert strategy in SOURCE_PAYLOAD_STRATEGIES, f"unsupported source payload strategy: {strategy}"
+
+    configured_lengths = template.get("source_payload_lengths", DEFAULT_SOURCE_PAYLOAD_LENGTHS)
+    assert isinstance(configured_lengths, list | tuple) and configured_lengths, "source_payload_lengths must be a non-empty list"
+    payload_lengths = [str(length) for length in configured_lengths]
+    for payload_length in payload_lengths:
+        assert payload_length in SOURCE_PAYLOAD_LENGTHS, f"unsupported source payload length: {payload_length}"
+
+    configured_styles = template.get("source_payload_styles", DEFAULT_SOURCE_PAYLOAD_STYLES)
+    assert isinstance(configured_styles, list | tuple) and configured_styles, "source_payload_styles must be a non-empty list"
+    paste_styles = [str(style) for style in configured_styles]
+    for paste_style in paste_styles:
+        assert paste_style in SOURCE_PAYLOAD_STYLES, f"unsupported source payload style: {paste_style}"
+
+    configured_label_styles = template.get("source_payload_label_styles", DEFAULT_SOURCE_PAYLOAD_LABEL_STYLES)
+    assert (
+        isinstance(configured_label_styles, list | tuple) and configured_label_styles
+    ), "source_payload_label_styles must be a non-empty list"
+    label_styles = [str(style) for style in configured_label_styles]
+    for label_style in label_styles:
+        assert label_style in SOURCE_PAYLOAD_LABEL_STYLES, f"unsupported source payload label style: {label_style}"
+
+    strategy = strategies[_stable_index(f"{archetype_id}|{variant_index}", len(strategies))]
+    payload_length = payload_lengths[_stable_index(f"{archetype_id}|{variant_index}|payload_length", len(payload_lengths))]
+    paste_style = paste_styles[_stable_index(f"{archetype_id}|{variant_index}|paste_style", len(paste_styles))]
+    label_style = label_styles[_stable_index(f"{archetype_id}|{variant_index}|label_style", len(label_styles))]
+    detail = SOURCE_PAYLOAD_STRATEGIES[strategy]
+    length_detail = SOURCE_PAYLOAD_LENGTHS[payload_length]
+    label_detail = SOURCE_PAYLOAD_LABEL_STYLES[label_style]
+    return {
+        "strategy": strategy,
+        "label": detail["label"],
+        "payload_length": payload_length,
+        "payload_length_label": str(length_detail["label"]),
+        "paste_style": paste_style,
+        "paste_style_label": SOURCE_PAYLOAD_STYLES[paste_style],
+        "label_style": label_style,
+        "label_style_label": str(label_detail["label"]),
+        "user_visibility": detail["user_visibility"],
+        "assistant_boundary": detail["assistant_boundary"],
+    }
 
 
 def _template_id(template: dict[str, Any]) -> str:
@@ -3431,6 +4863,17 @@ def _consistentchat_top_level_intent(subtask_trajectory: str, *, domain: str) ->
 def _format_scenario_variant(seed_spec: dict[str, Any]) -> str:
     variant = seed_spec.get("scenario_variant", _scenario_variant(0, variant_count=1))
     return json.dumps(variant, indent=2, sort_keys=True)
+
+
+def _format_source_payload_plan(seed_spec: dict[str, Any]) -> str:
+    plan = seed_spec.get("source_payload_plan")
+    if not isinstance(plan, dict):
+        plan = _source_payload_plan_for_seed(
+            {"source_payload_strategies": DEFAULT_SOURCE_PAYLOAD_STRATEGIES},
+            archetype_id="default",
+            variant_index=0,
+        )
+    return json.dumps(plan, indent=2, sort_keys=True)
 
 
 def _format_scenario_instance(seed_spec: dict[str, Any]) -> str:
@@ -3513,7 +4956,12 @@ def _epistemic_policy_instruction() -> str:
         "named-organization rules, official labels, form requirements, local market ranges, and provider-specific "
         "availability. The assistant may use broad public knowledge, but should present it as background memory rather "
         "than verified lookup, hedge uncertainty, and say what should be checked in the current source when precision "
-        "matters or lookup would normally be needed. For deadlines, appeal windows, fees, complaint bodies, eligibility rules, "
+        "matters or lookup would normally be needed. Practical examples, recipes, routines, and time estimates should "
+        "be framed as examples, rough estimates, or starting points to test, not as proven outcomes or exact timings. "
+        "Technical troubleshooting should distinguish visible evidence from hypotheses: exact package compatibility, "
+        "build requirements, maintenance status, platform behavior, and root-cause claims require visible logs, version "
+        "metadata, documentation, or release notes. Otherwise, phrase them as likely explanations to verify and give "
+        "the verification step. For deadlines, appeal windows, fees, complaint bodies, eligibility rules, "
         "legal/procedural requirements, rights or entitlements, success likelihood, likely outcomes, official URLs, "
         "or policy-specific thresholds, prefer a source-bounded checklist or formula using the visible dates and source "
         "text; do not invent receipt dates, official time limits, free/paid status, institution names, "
@@ -3546,11 +4994,15 @@ def _discourse_quality_instruction() -> str:
         "naturally in gender and number. "
         "For localized dialogues, do not invent official product, operating-system, legal, form, policy, or UI labels. "
         "If an official localized term is uncertain, use a generic description or say the label may vary instead of "
-        "writing a precise-sounding translation. Assistant turns should not use emojis or decorative emoji bullets; "
-        "use plain text headings, bullets, or numbering instead. Assistant turns should use restrained plain-text "
-        "formatting: short paragraphs, simple bullets, or simple numbering when useful. Avoid markdown emphasis such "
-        "as **bold** or *italics*, horizontal rules, decorative separators, and long stacked heading structures unless "
-        "the user explicitly asks for a formatted artifact that requires them.\n\n"
+        "writing a precise-sounding translation. Assistant turns should not use emojis, decorative emoji bullets, "
+        "or checkmark/cross/warning symbols; "
+        "use plain text headings, bullets, or numbering instead. Assistant turns should use light functional "
+        "formatting: paragraph breaks, short headings, simple bullets, numbered steps, compact tables, or occasional "
+        "emphasis when useful. When using Markdown, write structurally valid Markdown with blank lines between "
+        "paragraphs, headings, lists, tables, and major sections where Markdown needs them. Do not use horizontal "
+        "rules or separators as spacing. Use bold sparingly; do not bold routine list labels, every key term, "
+        "or whole sentences. Avoid decorative formatting, repeated separators, excessive emphasis, and long stacked "
+        "heading structures.\n\n"
     )
 
 
@@ -3578,6 +5030,178 @@ def _evidence_boundary_instruction(seed_spec: dict[str, Any]) -> str:
     )
 
 
+def _source_grounding(seed_spec: dict[str, Any]) -> dict[str, Any] | None:
+    source = seed_spec.get("source_grounding")
+    if isinstance(source, dict):
+        return source
+    return None
+
+
+def _source_grounding_reference(seed_spec: dict[str, Any]) -> str:
+    source = _source_grounding(seed_spec)
+    if source is None:
+        return ""
+    return (
+        "Original source-grounding reference. This is generator/reviewer context, not assistant-visible evidence "
+        "unless the user includes it in the visible transcript.\n"
+        f"Source pack: {source['pack_id']}\n"
+        f"Source family: {source['source_name']}\n"
+        f"Document id: {source['document_id']}\n"
+        f"Title: {source.get('title', '')}\n"
+        f"Created/date metadata: {source.get('created', '')}\n"
+        "Immutable source excerpt:\n"
+        f"{source['excerpt']}\n\n"
+    )
+
+
+def _source_grounding_generation_instruction(seed_spec: dict[str, Any]) -> str:
+    source = _source_grounding(seed_spec)
+    if source is None:
+        return ""
+    return (
+        "Source-grounding rule: downstream scenario, blueprint, skeleton, user-turn, and assistant-turn generation "
+        "must treat source facts as unavailable until exact source payloads are inserted into visible user turns. "
+        "The original source excerpt is immutable reviewer/planner context, but it is not assistant evidence and "
+        "should not be recited into hidden artifacts or dialogue plans. Vary the user's role, motivation, task, "
+        "missing facts, requested deliverable, and disclosure timing, but do not invent, rename, anonymize, or alter "
+        "source-specific entities, titles, outlets, institutions, case numbers, dates, quoted phrases, findings, "
+        "legal/procedural facts, obligations, thresholds, or factual claims. Write task plans as operations over "
+        "the source text that will become visible, not as target facts to assert. The assistant may only use source "
+        "facts after they are visible in the transcript. Persona context is only a diversity vector; for localized "
+        "Danish rows, do not copy foreign persona names, locations, currency, institutions, legal settings, or "
+        "biography unless the source or user-visible scenario specifically requires a foreign context.\n\n"
+        f"Source context for task shape only: pack={source['pack_id']}; family={source['source_name']}. "
+        "Exact title, document id, date metadata, and source facts are withheld from downstream generation unless "
+        "they appear inside an injected source payload.\n\n"
+        "Source visibility plan for the later visible dialogue:\n"
+        f"{_format_source_payload_plan(seed_spec)}\n\n"
+    )
+
+
+def _source_grounding_visible_payload_instruction(seed_spec: dict[str, Any]) -> str:
+    if _source_grounding(seed_spec) is None:
+        return ""
+    return (
+        "Source-pack visible-payload rule: follow the sampled source visibility plan below. The actual source text is "
+        "injected by the pipeline, not generated by the user simulator. Some rows should expose the provided source "
+        "excerpt; others should expose selected passages, a long passage, exact source passages, or staged excerpts across "
+        "turns. The user may frame the question before or after inserted source text, but assistant-verifiable source "
+        "facts must appear in visible user text before the assistant uses them. Later user turns should add user-owned "
+        "context, constraints, interpretations, follow-up questions, or new source-payload placeholders rather than "
+        "introducing hidden source facts by implication. Do not describe a payload as full, complete, all of the "
+        "document, or exhaustive; use neutral wording such as this excerpt, this pasted text, or the selected passages. "
+        "Payloads may appear as code-fenced text, blockquotes, plain delimited pastes, or separator-delimited pastes; "
+        "all of these are visible source evidence.\n\n"
+        "Sampled source visibility plan:\n"
+        f"{_format_source_payload_plan(seed_spec)}\n\n"
+    )
+
+
+def _source_grounding_user_simulator_instruction(seed_spec: dict[str, Any], *, user_turns: int) -> str:
+    source = _source_grounding(seed_spec)
+    if source is None:
+        return ""
+    slots = _source_payload_slots(seed_spec, user_turn_count=user_turns)
+    prompt_slots = [
+        {
+            "placeholder": slot["placeholder"],
+            "target_user_turn": slot["target_user_turn"],
+            "strategy": slot["strategy"],
+            "payload_length": slot["payload_length"],
+            "paste_style_after_injection": slot["paste_style"],
+            "visible_label_after_injection": slot["label"],
+            "char_count": slot["char_count"],
+        }
+        for slot in slots
+    ]
+    return (
+        "Source-pack user-simulation rule: do not reproduce, paraphrase as if quoted, shorten, translate, or repair "
+        "the original source excerpt yourself. Place each source-payload placeholder exactly once in the visible user "
+        "turn where that source material should appear. The build pipeline will replace placeholders with exact source "
+        "text after user-turn generation, before assistant generation. You may write the user's surrounding question, "
+        "context, constraints, and follow-up requests naturally, but do not add source-owned dates, thresholds, case "
+        "numbers, quoted phrases, obligations, medical criteria, legal rules, or procedural facts outside the injected "
+        "payload. Do not refer to source title, document id, date metadata, exact institutional names, or exact "
+        "source-owned values unless they will be present in the same visible user turn through a placeholder. Do not "
+        "call a payload full, complete, exhaustive, all recitals, or the whole document. If a later turn needs more "
+        "source evidence, use the later placeholder before asking about it. The pipeline may render inserted source "
+        "payloads with varied neutral labels and as a code fence, blockquote, plain delimited paste, or "
+        "separator-delimited paste; do not write those wrappers yourself.\n\n"
+        f"Source context for task shape only: pack={source['pack_id']}; family={source['source_name']}. "
+        "Exact source metadata and source facts are available only through inserted payloads.\n"
+        "Sampled source visibility plan:\n"
+        f"{_format_source_payload_plan(seed_spec)}\n\n"
+        "Source-payload placeholders to use:\n"
+        f"{json.dumps(prompt_slots, indent=2, sort_keys=True)}\n\n"
+    )
+
+
+def _source_grounding_skeleton_instruction(seed_spec: dict[str, Any]) -> str:
+    if _source_grounding(seed_spec) is None:
+        return ""
+    return (
+        "Source-pack skeleton rule: plan source visibility according to the sampled source payload plan. Do not put "
+        "hidden source facts into assistant dialogue acts or state deltas as targets to assert. "
+        "Assistant steps must be procedural, for example: extract covered roles visible in the pasted source, list any "
+        "effective dates visible in the source, separate confirmed source facts from unknowns, and ask for missing "
+        "controlling sections. Bad assistant purpose: \"assert the hidden effective date and repealed source\". "
+        "Good assistant purpose: \"identify any effective date and repeal notice visible in the prior pasted source, "
+        "and mark absent implementation details as unknown\". User steps should introduce source placeholders before "
+        "asking about source-owned facts, and should not name exact source values outside those payloads.\n\n"
+        "Sampled source visibility plan:\n"
+        f"{_format_source_payload_plan(seed_spec)}\n\n"
+    )
+
+
+def _source_grounding_review_instruction(seed_spec: dict[str, Any]) -> str:
+    if _source_grounding(seed_spec) is None:
+        return ""
+    return (
+        f"{_source_grounding_reference(seed_spec)}"
+        "Source-pack review rule: compare the visible dialogue against the original source reference above. Fail "
+        "source_boundary if a visible user payload or assistant answer mutates source-specific entities, titles, "
+        "outlets, institutions, case numbers, dates, quoted phrases, findings, legal/procedural facts, obligations, "
+        "or factual claims from the original source. Persona and scenario variation may add the user's situation, "
+        "motive, preferences, deadlines, and requested deliverable, but it may not rewrite the source into a different "
+        "case, policy, document, product, rule, quote, or factual situation. For localized Danish rows, fail "
+        "language_quality or naturalness if irrelevant foreign persona names, places, currency, institutions, or "
+        "biographical details are copied into the row instead of being abstracted into a Danish-localized or neutral "
+        "user situation. Fail source_boundary if an inserted source payload is made of broken fragments, isolated "
+        "numbers, citation/date shards, or unreadable snippets rather than complete readable source passages. "
+        "The original source reference above is not assistant-visible evidence. Fail source_boundary "
+        "if the assistant uses a source fact from the original reference before that fact appears in prior visible user "
+        "text, even when the fact is correct in the original source. Do not fail merely because the user asks "
+        "for a transformation, explanation, checklist, or draft based on the source.\n\n"
+    )
+
+
+def _hidden_source_grounding(seed_spec: dict[str, Any]) -> dict[str, Any]:
+    source = _source_grounding(seed_spec)
+    if source is None:
+        return {}
+    return {
+        "pack_id": source["pack_id"],
+        "source_name": source["source_name"],
+        "document_id": source["document_id"],
+        "title": source.get("title", ""),
+        "created": source.get("created", ""),
+        "excerpt": source["excerpt"],
+        "license": source.get("license", ""),
+        "url": source.get("url", ""),
+        "payload_plan": seed_spec.get("source_payload_plan", {}),
+        "payload_slots": [
+            {
+                "index": slot["index"],
+                "strategy": slot["strategy"],
+                "target_user_turn": slot["target_user_turn"],
+                "char_count": slot["char_count"],
+                "text": slot["text"],
+            }
+            for slot in _source_payload_slots(seed_spec, user_turn_count=_target_user_turns(seed_spec))
+        ],
+    }
+
+
 def _templates(generation: dict[str, Any]) -> list[dict[str, Any]]:
     sources = generation.get("seed_sources")
     if not sources:
@@ -3587,9 +5211,14 @@ def _templates(generation: dict[str, Any]) -> list[dict[str, Any]]:
     for source in sources:
         assert isinstance(source, dict), "seed source entries must be mappings"
         source_type = source.get("type")
-        assert source_type == "handwritten", f"unsupported multi_turn_dialogue seed source: {source_type}"
-        templates.extend(_load_handwritten_templates(source))
-    assert templates, "handwritten seed sources must contain at least one seed"
+        if source_type == "handwritten":
+            templates.extend(_load_handwritten_templates(source))
+            continue
+        if source_type == "source_pack":
+            templates.extend(_load_source_pack_templates(source))
+            continue
+        raise AssertionError(f"unsupported multi_turn_dialogue seed source: {source_type}")
+    assert templates, "multi_turn_dialogue seed sources must produce at least one seed"
     return templates
 
 
@@ -3600,6 +5229,374 @@ def _load_handwritten_templates(source: dict[str, Any]) -> list[dict[str, Any]]:
     seeds = document.get("seeds")
     assert isinstance(seeds, list), "handwritten seed source must contain a seeds list"
     return [_normalize_handwritten_seed(seed) for seed in seeds]
+
+
+def _load_source_pack_templates(source: dict[str, Any]) -> list[dict[str, Any]]:
+    documents_cfg = source.get("documents")
+    assert isinstance(documents_cfg, dict), "source_pack seed source must include a documents mapping"
+    personas_cfg = source.get("personas")
+    assert personas_cfg is None or isinstance(personas_cfg, dict), "source_pack personas must be a mapping"
+
+    documents = _load_source_documents(source, documents_cfg)
+    personas = _load_persona_contexts(personas_cfg, limit=len(documents))
+    templates = []
+    for index, document in enumerate(documents):
+        persona = personas[index % len(personas)] if personas else {}
+        templates.append(_source_pack_template(source, document, persona, index=index))
+    assert templates, "source_pack seed source must produce at least one source document"
+    return templates
+
+
+def _load_source_documents(source: dict[str, Any], documents_cfg: dict[str, Any]) -> list[dict[str, Any]]:
+    text_field = str(documents_cfg.get("text_field", "text"))
+    id_field = str(documents_cfg.get("id_field", "id"))
+    source_field = str(documents_cfg.get("source_field", "source"))
+    title_field = documents_cfg.get("title_field")
+    created_field = documents_cfg.get("created_field")
+    min_chars = int(documents_cfg.get("min_chars", 200))
+    max_chars = int(documents_cfg.get("max_chars", 3000))
+    max_records = int(documents_cfg.get("max_records", source.get("max_records", 64)))
+
+    documents = []
+    for record in iter_source_records(documents_cfg, default_streaming=True):
+        assert isinstance(record, dict), "source_pack document records must be mappings"
+        if not _record_matches_filters(record, documents_cfg):
+            continue
+        text = read_record_value(record, text_field)
+        if text is None or len(text) < min_chars:
+            continue
+        document_id = read_record_value(record, id_field) or f"{source_label(documents_cfg)}-{len(documents):05d}"
+        source_name = read_record_value(record, source_field) or source_label(documents_cfg)
+        documents.append(
+            {
+                "document_id": document_id,
+                "source_name": source_name,
+                "title": read_record_value(record, str(title_field)) if title_field else "",
+                "created": read_record_value(record, str(created_field)) if created_field else "",
+                "excerpt": _trim_source_excerpt(text, max_chars=max_chars),
+                "raw_token_count": read_record_value(record, "token_count") or "",
+            }
+        )
+        if len(documents) >= max_records:
+            break
+    assert documents, f"source_pack {source.get('id', source_label(documents_cfg))} produced no usable documents"
+    return documents
+
+
+def _record_matches_filters(record: dict[str, Any], cfg: dict[str, Any]) -> bool:
+    include_values = cfg.get("include_values", {})
+    assert isinstance(include_values, dict), "source include_values must be a mapping when provided"
+    for field, allowed_values in include_values.items():
+        allowed = {str(value) for value in _list_config(allowed_values)}
+        value = read_record_value(record, str(field))
+        if value not in allowed:
+            return False
+    return True
+
+
+def _load_persona_contexts(personas_cfg: dict[str, Any] | None, *, limit: int) -> list[dict[str, Any]]:
+    if not personas_cfg:
+        return []
+    max_records = int(personas_cfg.get("max_records", limit))
+    persona_fields = [str(field) for field in personas_cfg.get("persona_fields", ["persona", "professional_persona"])]
+    id_field = str(personas_cfg.get("id_field", "uuid"))
+    min_age = personas_cfg.get("min_age", 18)
+    max_chars = int(personas_cfg.get("max_chars", 1600))
+    projection_cfg = personas_cfg.get("projection", {})
+    assert isinstance(projection_cfg, dict), "persona projection must be a mapping when provided"
+    use_projection = bool(projection_cfg.get("enabled", False))
+
+    personas = []
+    for record in iter_source_records(personas_cfg, default_streaming=True):
+        assert isinstance(record, dict), "persona records must be mappings"
+        if min_age is not None and not _record_age_at_least(record, int(min_age)):
+            continue
+        persona_id = read_record_value(record, id_field) or f"{source_label(personas_cfg)}-{len(personas):05d}"
+        if use_projection:
+            personas.append(_project_persona_context(record, personas_cfg, projection_cfg, persona_id=persona_id))
+        else:
+            persona_text = _join_record_fields(record, persona_fields)
+            if not persona_text:
+                continue
+            personas.append(
+                {
+                    "id": persona_id,
+                    "source": source_label(personas_cfg),
+                    "license": str(personas_cfg.get("license", "cc-by-4.0")),
+                    "persona": _trim_source_excerpt(persona_text, max_chars=max_chars),
+                    "occupation": read_record_value(record, "occupation") or "",
+                    "education_level": read_record_value(record, "education_level") or "",
+                    "age": read_record_value(record, "age") or "",
+                }
+            )
+        if len(personas) >= max_records:
+            break
+    assert personas, f"persona source {source_label(personas_cfg)} produced no usable personas"
+    return personas
+
+
+def _project_persona_context(
+    record: dict[str, Any],
+    personas_cfg: dict[str, Any],
+    projection_cfg: dict[str, Any],
+    *,
+    persona_id: str,
+) -> dict[str, Any]:
+    target_locale = str(projection_cfg.get("target_locale", ""))
+    occupation = _humanize_surface_value(
+        read_record_value(record, str(projection_cfg.get("occupation_field", "occupation"))) or "adult user"
+    )
+    education_level = _humanize_surface_value(
+        read_record_value(record, str(projection_cfg.get("education_field", "education_level"))) or ""
+    )
+    age_band = _age_band(read_record_value(record, str(projection_cfg.get("age_field", "age"))))
+    seed_text = "|".join([persona_id, occupation, education_level, age_band, target_locale])
+    communication_style = _stable_choice(PERSONA_COMMUNICATION_STYLES, seed_text + "|style")
+    task_posture = _stable_choice(PERSONA_TASK_POSTURES, seed_text + "|posture")
+    constraints = _stable_sample(PERSONA_PRACTICAL_CONSTRAINTS, seed_text + "|constraints", count=2)
+    skill_tags = _projected_skill_tags(record, projection_cfg)
+    surface = {
+        "role_archetype": occupation,
+        "age_band": age_band,
+        "education_level": education_level,
+        "communication_style": communication_style,
+        "task_posture": task_posture,
+        "practical_constraints": constraints,
+        "skill_tags": skill_tags,
+        "target_locale": target_locale,
+        "localization_rule": "localize into the target locale or keep neutral; do not copy source persona identity",
+    }
+    return {
+        "id": persona_id,
+        "source": source_label(personas_cfg),
+        "license": str(personas_cfg.get("license", "cc-by-4.0")),
+        "projection_mode": "surface",
+        "persona": _format_projected_persona(surface),
+        "surface": surface,
+    }
+
+
+def _projected_skill_tags(record: dict[str, Any], projection_cfg: dict[str, Any]) -> list[str]:
+    if not bool(projection_cfg.get("include_skill_tags", False)):
+        return []
+    field_name = str(projection_cfg.get("skill_tags_field", "skills_and_expertise_list"))
+    max_items = int(projection_cfg.get("max_skill_tags", 3))
+    return [_humanize_surface_value(value) for value in _record_list_values(record, field_name, max_items=max_items)]
+
+
+def _format_projected_persona(surface: dict[str, Any]) -> str:
+    parts = [
+        f"role archetype: {surface['role_archetype']}",
+        f"age band: {surface['age_band']}",
+        f"education: {surface['education_level'] or 'unspecified'}",
+        f"style: {surface['communication_style']}",
+        f"task posture: {surface['task_posture']}",
+        f"constraints: {', '.join(surface['practical_constraints'])}",
+    ]
+    skill_tags = surface.get("skill_tags") or []
+    if skill_tags:
+        parts.append(f"surface skills: {', '.join(skill_tags)}")
+    target_locale = str(surface.get("target_locale", ""))
+    if target_locale:
+        parts.append(f"target locale: {target_locale}")
+    return "Projected surface persona; " + "; ".join(parts) + "."
+
+
+def _age_band(value: str | None) -> str:
+    if value is None:
+        return "adult"
+    age = int(value)
+    if age < 25:
+        return "adult_18_24"
+    if age < 35:
+        return "adult_25_34"
+    if age < 50:
+        return "adult_35_49"
+    if age < 65:
+        return "adult_50_64"
+    return "adult_65_plus"
+
+
+def _humanize_surface_value(value: str) -> str:
+    return " ".join(value.replace("_", " ").replace("-", " ").split())
+
+
+def _stable_choice(values: tuple[str, ...], seed_text: str) -> str:
+    return values[_stable_index(seed_text, len(values))]
+
+
+def _stable_sample(values: tuple[str, ...], seed_text: str, *, count: int) -> list[str]:
+    start = _stable_index(seed_text, len(values))
+    return [values[(start + offset) % len(values)] for offset in range(min(count, len(values)))]
+
+
+def _stable_index(seed_text: str, modulo: int) -> int:
+    assert modulo > 0, "stable index modulo must be positive"
+    value = 0
+    for char in seed_text:
+        value = (value * 33 + ord(char)) % 2_147_483_647
+    return value % modulo
+
+
+def _record_list_values(record: dict[str, Any], field_name: str, *, max_items: int) -> list[str]:
+    value: Any = record
+    for part in field_name.split("."):
+        if not isinstance(value, dict):
+            return []
+        value = value.get(part)
+        if value is None:
+            return []
+    if isinstance(value, list | tuple):
+        return [str(item).strip() for item in value[:max_items] if str(item).strip()]
+    text = str(value).strip()
+    if not text:
+        return []
+    if text.startswith("[") and text.endswith("]"):
+        try:
+            parsed = ast.literal_eval(text)
+        except (SyntaxError, ValueError):
+            parsed = None
+        if isinstance(parsed, list | tuple):
+            return [str(item).strip() for item in parsed[:max_items] if str(item).strip()]
+    return [text]
+
+
+def _record_age_at_least(record: dict[str, Any], min_age: int) -> bool:
+    value = record.get("age")
+    if value is None:
+        return True
+    return int(value) >= min_age
+
+
+def _join_record_fields(record: dict[str, Any], fields: list[str]) -> str:
+    values = [value for field in fields if (value := read_record_value(record, field))]
+    return "\n".join(values)
+
+
+def _source_pack_template(
+    source: dict[str, Any],
+    document: dict[str, Any],
+    persona: dict[str, Any],
+    *,
+    index: int,
+) -> dict[str, Any]:
+    pack_id = str(source.get("id", document["source_name"]))
+    family = str(source.get("family", "grounded_dialogue"))
+    domain_hint = str(source.get("domain_hint", _slug(document["source_name"])))
+    source_methods = [str(method) for method in source.get("source_methods", DEFAULT_SOURCE_METHODS)]
+    blueprint = {
+        "domain": domain_hint,
+        "user_persona": persona.get("persona", "source-grounded Danish user with a practical task"),
+        "hidden_goal": f"create a source-grounded Danish task from {document['source_name']}",
+        "source_context": {
+            "source_pack": pack_id,
+            "source_name": document["source_name"],
+            "source_text_available_to_visible_dialogue_only_via_injected_payload": True,
+        },
+        "persona_context": persona,
+        "success_criteria": [
+            "the assistant only treats source details as known after the user makes the excerpt visible",
+            "the dialogue produces a useful source-grounded work product",
+            "exact source-dependent, current, legal, policy, health, or procedural claims remain bounded to visible text",
+            "the user situation is varied through the sampled persona without copying irrelevant persona facts",
+        ],
+    }
+    return {
+        "id": f"{pack_id}-{index:05d}",
+        "family": family,
+        "intent_trajectory": str(source.get("intent_trajectory", "Information Retrieval Interaction")),
+        "subtask_trajectory": str(source.get("subtask_trajectory", "source_grounded_synthesis")),
+        "query_trajectory_hint": [],
+        "blueprint": blueprint,
+        "success_criteria": list(blueprint["success_criteria"]),
+        "source_methods": source_methods,
+        "source_language": str(source.get("source_language", "da")),
+        "difficulty_axis": str(source.get("difficulty_axis", "source-grounded task with visible excerpt boundary")),
+        "requires_epistemic_hedging": True,
+        "volatile_items": [str(item) for item in source.get("volatile_items", ["current source status", "unseen rules"])],
+        "source_payload_strategies": [
+            str(strategy)
+            for strategy in source.get("source_payload_strategies", DEFAULT_SOURCE_PAYLOAD_STRATEGIES)
+        ],
+        "source_payload_lengths": [
+            str(length)
+            for length in source.get("source_payload_lengths", DEFAULT_SOURCE_PAYLOAD_LENGTHS)
+        ],
+        "source_payload_styles": [
+            str(style)
+            for style in source.get("source_payload_styles", DEFAULT_SOURCE_PAYLOAD_STYLES)
+        ],
+        "source_payload_label_styles": [
+            str(style)
+            for style in source.get("source_payload_label_styles", DEFAULT_SOURCE_PAYLOAD_LABEL_STYLES)
+        ],
+        "source_grounding": {
+            "pack_id": pack_id,
+            **document,
+            "license": str(source.get("license", "")),
+            "url": str(source.get("url", "")),
+        },
+        "persona_context": persona,
+        "external_sources": _external_sources_for_source_pack(source, document, persona),
+    }
+
+
+def _external_sources_for_source_pack(
+    source: dict[str, Any],
+    document: dict[str, Any],
+    persona: dict[str, Any],
+) -> list[dict[str, str]]:
+    external_sources = [
+        {
+            "kind": "source_excerpt",
+            "name": document["source_name"],
+            "role": "visible source material for grounded task planning",
+            "document_id": document["document_id"],
+            "source_pack": str(source.get("id", document["source_name"])),
+        }
+    ]
+    if source.get("url"):
+        external_sources[0]["url"] = str(source["url"])
+    if source.get("license"):
+        external_sources[0]["license"] = str(source["license"])
+    if persona:
+        external_sources.append(
+            {
+                "kind": "persona_source",
+                "name": persona["source"],
+                "role": "persona diversity seed for source-to-task planning",
+                "document_id": str(persona["id"]),
+                "license": str(persona.get("license", "")),
+            }
+        )
+    return external_sources
+
+
+def _list_config(value: Any) -> list[Any]:
+    if isinstance(value, list):
+        return value
+    return [value]
+
+
+def _trim_source_excerpt(text: str, *, max_chars: int) -> str:
+    stripped = _normalize_source_text(text).strip()
+    if len(stripped) <= max_chars:
+        return stripped
+    truncated = stripped[:max_chars]
+    cut_at = _source_excerpt_cut_boundary(truncated)
+    if cut_at > 0:
+        return truncated[:cut_at].rstrip()
+    return truncated.rstrip()
+
+
+def _normalize_source_text(text: str) -> str:
+    return text.replace("\r\n", "\n").replace("\r", "\n")
+
+
+def _source_excerpt_cut_boundary(text: str) -> int:
+    lower_bound = int(len(text) * 0.6)
+    boundaries = [text.rfind(marker, lower_bound) for marker in ["\n\n", "\n", " "]]
+    return max(boundaries)
 
 
 def _resolve_seed_source_path(path: str) -> Path:

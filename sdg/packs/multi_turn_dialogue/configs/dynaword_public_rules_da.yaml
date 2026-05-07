@@ -1,0 +1,525 @@
+pack: multi_turn_dialogue
+seed: 17
+reuse_completed: true
+models:
+  source_task_planner:
+    endpoint: openai
+    timeout_seconds: 900
+  blueprint_writer:
+    endpoint: openai
+    timeout_seconds: 900
+  intent_modeler:
+    endpoint: openai
+    timeout_seconds: 900
+  skeleton_writer:
+    endpoint: openai
+    timeout_seconds: 900
+  user_simulator:
+    endpoint: openai
+    timeout_seconds: 900
+  assistant_teacher:
+    endpoint: openai
+    timeout_seconds: 900
+  reviewer:
+    endpoint: openai
+    timeout_seconds: 900
+  preference_writer:
+    endpoint: openai
+    timeout_seconds: 900
+generation:
+  count: 8
+  candidate_multiplier: 2
+  train_fraction: 0.75
+  languages: [da]
+  latent_language: en
+  seed_expansion:
+    variants_per_seed: 4
+  seed_sources:
+    - type: source_pack
+      id: dynaword_retsinformation_da
+      family: grounded_dialogue
+      source_language: da
+      source_methods: &source_methods
+        - APIGen-MT
+        - ConsistentChat
+        - Action-Based Contrastive Self-Training
+        - MDS
+      intent_trajectory: Information Retrieval Interaction
+      subtask_trajectory: source_grounded_synthesis
+      difficulty_axis: Danish public-source excerpt with missing user facts and current-status uncertainty
+      volatile_items: &public_source_volatile_items
+        - current source status
+        - unseen surrounding rules
+        - user-specific eligibility facts
+      source_payload_strategies: &source_payload_strategies
+        - full_excerpt
+        - long_contiguous_excerpt
+        - selected_clauses
+        - summary_plus_quotes
+        - staged_excerpts
+      source_payload_lengths: &source_payload_lengths
+        - long
+        - medium
+        - long
+        - short
+      source_payload_styles: &source_payload_styles
+        - fenced_text
+        - blockquote
+        - plain_delimited
+        - separator
+      source_payload_label_styles: &source_payload_label_styles
+        - excerpt
+        - pasted_text
+        - document_passage
+        - relevant_text
+        - copied_text
+        - quoted_passage
+      license: varies by Dynaword source
+      url: https://huggingface.co/datasets/danish-foundation-models/danish-dynaword
+      documents:
+        dataset: danish-foundation-models/danish-dynaword
+        config_name: retsinformationdk
+        split: train
+        streaming: true
+        text_field: text
+        id_field: id
+        source_field: source
+        created_field: created
+        min_chars: 500
+        max_chars: 12000
+        max_records: 512
+      personas: &nemotron_surface_personas
+        dataset: nvidia/Nemotron-Personas-USA
+        split: train
+        streaming: true
+        id_field: uuid
+        projection:
+          enabled: true
+          target_locale: da-DK
+          occupation_field: occupation
+          education_field: education_level
+          age_field: age
+          include_skill_tags: true
+          skill_tags_field: skills_and_expertise_list
+          max_skill_tags: 3
+        min_age: 18
+        max_records: 64
+        license: cc-by-4.0
+    - type: source_pack
+      id: dynaword_skat_da
+      family: grounded_dialogue
+      source_language: da
+      source_methods: *source_methods
+      intent_trajectory: Information Retrieval Interaction
+      subtask_trajectory: source_grounded_checklist
+      difficulty_axis: Danish tax/public guidance excerpt with user-specific facts missing
+      volatile_items: *public_source_volatile_items
+      source_payload_strategies: *source_payload_strategies
+      source_payload_lengths: *source_payload_lengths
+      source_payload_styles: *source_payload_styles
+      source_payload_label_styles: *source_payload_label_styles
+      license: varies by Dynaword source
+      url: https://huggingface.co/datasets/danish-foundation-models/danish-dynaword
+      documents:
+        dataset: danish-foundation-models/danish-dynaword
+        config_name: skat
+        split: train
+        streaming: true
+        text_field: text
+        id_field: id
+        source_field: source
+        created_field: created
+        min_chars: 500
+        max_chars: 12000
+        max_records: 512
+      personas: *nemotron_surface_personas
+    - type: source_pack
+      id: dynaword_domsdatabasen_da
+      family: grounded_dialogue
+      source_language: da
+      source_methods: *source_methods
+      intent_trajectory: Information Retrieval Interaction
+      subtask_trajectory: source_grounded_case_explanation
+      difficulty_axis: Danish court decision excerpt with limits on legal conclusions
+      volatile_items:
+        - current legal status
+        - unseen case context
+        - user-specific procedural facts
+      source_payload_strategies: *source_payload_strategies
+      source_payload_lengths: *source_payload_lengths
+      source_payload_styles: *source_payload_styles
+      source_payload_label_styles: *source_payload_label_styles
+      license: varies by Dynaword source
+      url: https://huggingface.co/datasets/danish-foundation-models/danish-dynaword
+      documents:
+        dataset: danish-foundation-models/danish-dynaword
+        config_name: domsdatabasen
+        split: train
+        streaming: true
+        text_field: text
+        id_field: id
+        source_field: source
+        created_field: created
+        min_chars: 500
+        max_chars: 12000
+        max_records: 512
+      personas: *nemotron_surface_personas
+    - type: source_pack
+      id: dynaword_eur_lex_da
+      family: grounded_dialogue
+      source_language: da
+      source_methods: *source_methods
+      intent_trajectory: Information Retrieval Interaction
+      subtask_trajectory: source_grounded_policy_summary
+      difficulty_axis: Danish EU summary excerpt with implementation and current-status uncertainty
+      volatile_items:
+        - current EU or Danish implementation status
+        - omitted articles or recitals
+        - user-specific compliance facts
+      source_payload_strategies: *source_payload_strategies
+      source_payload_lengths: *source_payload_lengths
+      source_payload_styles: *source_payload_styles
+      source_payload_label_styles: *source_payload_label_styles
+      license: varies by Dynaword source
+      url: https://huggingface.co/datasets/danish-foundation-models/danish-dynaword
+      documents:
+        dataset: danish-foundation-models/danish-dynaword
+        config_name: eur-lex-sum-da
+        split: train
+        streaming: true
+        text_field: text
+        id_field: id
+        source_field: source
+        created_field: created
+        min_chars: 500
+        max_chars: 12000
+        max_records: 512
+      personas: *nemotron_surface_personas
+    - type: source_pack
+      id: dynaword_retspraksis_da
+      family: grounded_dialogue
+      source_language: da
+      source_methods: *source_methods
+      intent_trajectory: Information Retrieval Interaction
+      subtask_trajectory: source_grounded_case_explanation
+      difficulty_axis: Danish legal practice excerpt with source limits and user-specific procedural facts missing
+      volatile_items:
+        - current legal status
+        - unseen procedural context
+        - user-specific deadlines or party facts
+      source_payload_strategies: *source_payload_strategies
+      source_payload_lengths: *source_payload_lengths
+      source_payload_styles: *source_payload_styles
+      source_payload_label_styles: *source_payload_label_styles
+      license: varies by Dynaword source
+      url: https://huggingface.co/datasets/danish-foundation-models/danish-dynaword
+      documents:
+        dataset: danish-foundation-models/danish-dynaword
+        config_name: retspraksis
+        split: train
+        streaming: true
+        text_field: text
+        id_field: id
+        source_field: source
+        created_field: created
+        min_chars: 500
+        max_chars: 12000
+        max_records: 512
+      personas: *nemotron_surface_personas
+    - type: source_pack
+      id: dynaword_tidsskrift_dk_da
+      family: grounded_dialogue
+      source_language: da
+      source_methods: *source_methods
+      intent_trajectory: Information Retrieval Interaction
+      subtask_trajectory: source_grounded_article_synthesis
+      difficulty_axis: Danish journal/article excerpt with domain-specific concepts and citation-context uncertainty
+      volatile_items:
+        - omitted article context
+        - publication field or terminology
+        - whether claims remain current or broadly accepted
+      source_payload_strategies: *source_payload_strategies
+      source_payload_lengths: *source_payload_lengths
+      source_payload_styles: *source_payload_styles
+      source_payload_label_styles: *source_payload_label_styles
+      license: varies by Dynaword source
+      url: https://huggingface.co/datasets/danish-foundation-models/danish-dynaword
+      documents:
+        dataset: danish-foundation-models/danish-dynaword
+        config_name: tidsskrift-dk
+        split: train
+        streaming: true
+        text_field: text
+        id_field: id
+        source_field: source
+        created_field: created
+        min_chars: 500
+        max_chars: 12000
+        max_records: 512
+      personas: *nemotron_surface_personas
+    - type: source_pack
+      id: dynaword_miljoeportalen_da
+      family: grounded_dialogue
+      source_language: da
+      source_methods: *source_methods
+      intent_trajectory: Information Retrieval Interaction
+      subtask_trajectory: source_grounded_environmental_guidance
+      difficulty_axis: Danish environmental information excerpt with local applicability and current-status uncertainty
+      volatile_items:
+        - current environmental guidance
+        - local municipality or site-specific facts
+        - omitted technical definitions or reporting thresholds
+      source_payload_strategies: *source_payload_strategies
+      source_payload_lengths: *source_payload_lengths
+      source_payload_styles: *source_payload_styles
+      source_payload_label_styles: *source_payload_label_styles
+      license: varies by Dynaword source
+      url: https://huggingface.co/datasets/danish-foundation-models/danish-dynaword
+      documents:
+        dataset: danish-foundation-models/danish-dynaword
+        config_name: miljoeportalen
+        split: train
+        streaming: true
+        text_field: text
+        id_field: id
+        source_field: source
+        created_field: created
+        min_chars: 500
+        max_chars: 12000
+        max_records: 512
+      personas: *nemotron_surface_personas
+    - type: source_pack
+      id: dynaword_fm_udgivelser_da
+      family: grounded_dialogue
+      source_language: da
+      source_methods: *source_methods
+      intent_trajectory: Information Retrieval Interaction
+      subtask_trajectory: source_grounded_report_synthesis
+      difficulty_axis: Danish public report excerpt with policy interpretation and omitted-methodology uncertainty
+      volatile_items:
+        - current policy status
+        - omitted tables or methodology
+        - user-specific organizational implications
+      source_payload_strategies: *source_payload_strategies
+      source_payload_lengths: *source_payload_lengths
+      source_payload_styles: *source_payload_styles
+      source_payload_label_styles: *source_payload_label_styles
+      license: varies by Dynaword source
+      url: https://huggingface.co/datasets/danish-foundation-models/danish-dynaword
+      documents:
+        dataset: danish-foundation-models/danish-dynaword
+        config_name: fm-udgivelser
+        split: train
+        streaming: true
+        text_field: text
+        id_field: id
+        source_field: source
+        created_field: created
+        min_chars: 500
+        max_chars: 12000
+        max_records: 512
+      personas: *nemotron_surface_personas
+    - type: source_pack
+      id: dynaword_ai_aktindsigt_da
+      family: grounded_dialogue
+      source_language: da
+      source_methods: *source_methods
+      intent_trajectory: Transaction Interaction
+      subtask_trajectory: source_grounded_public_records_assistance
+      difficulty_axis: Danish public-records excerpt with document-scope and request-wording uncertainty
+      volatile_items:
+        - current access-to-information practice
+        - omitted case facts or attachments
+        - user-specific authority and deadline facts
+      source_payload_strategies: *source_payload_strategies
+      source_payload_lengths: *source_payload_lengths
+      source_payload_styles: *source_payload_styles
+      source_payload_label_styles: *source_payload_label_styles
+      license: varies by Dynaword source
+      url: https://huggingface.co/datasets/danish-foundation-models/danish-dynaword
+      documents:
+        dataset: danish-foundation-models/danish-dynaword
+        config_name: ai-aktindsigt
+        split: train
+        streaming: true
+        text_field: text
+        id_field: id
+        source_field: source
+        created_field: created
+        min_chars: 500
+        max_chars: 12000
+        max_records: 512
+      personas: *nemotron_surface_personas
+    - type: source_pack
+      id: dynaword_ft_da
+      family: grounded_dialogue
+      source_language: da
+      source_methods: *source_methods
+      intent_trajectory: Information Retrieval Interaction
+      subtask_trajectory: source_grounded_parliamentary_summary
+      difficulty_axis: Danish parliamentary excerpt with political context and current-status uncertainty
+      volatile_items:
+        - current legislative status
+        - omitted debate context
+        - party or stakeholder positions not visible in the excerpt
+      source_payload_strategies: *source_payload_strategies
+      source_payload_lengths: *source_payload_lengths
+      source_payload_styles: *source_payload_styles
+      source_payload_label_styles: *source_payload_label_styles
+      license: varies by Dynaword source
+      url: https://huggingface.co/datasets/danish-foundation-models/danish-dynaword
+      documents:
+        dataset: danish-foundation-models/danish-dynaword
+        config_name: ft
+        split: train
+        streaming: true
+        text_field: text
+        id_field: id
+        source_field: source
+        created_field: created
+        min_chars: 500
+        max_chars: 12000
+        max_records: 512
+      personas: *nemotron_surface_personas
+    - type: source_pack
+      id: dynaword_ep_da
+      family: grounded_dialogue
+      source_language: da
+      source_methods: *source_methods
+      intent_trajectory: Information Retrieval Interaction
+      subtask_trajectory: source_grounded_eu_policy_summary
+      difficulty_axis: Danish European Parliament excerpt with institutional and implementation uncertainty
+      volatile_items:
+        - current EU legislative status
+        - omitted amendments or recitals
+        - Danish implementation or stakeholder implications
+      source_payload_strategies: *source_payload_strategies
+      source_payload_lengths: *source_payload_lengths
+      source_payload_styles: *source_payload_styles
+      source_payload_label_styles: *source_payload_label_styles
+      license: varies by Dynaword source
+      url: https://huggingface.co/datasets/danish-foundation-models/danish-dynaword
+      documents:
+        dataset: danish-foundation-models/danish-dynaword
+        config_name: ep
+        split: train
+        streaming: true
+        text_field: text
+        id_field: id
+        source_field: source
+        created_field: created
+        min_chars: 500
+        max_chars: 12000
+        max_records: 512
+      personas: *nemotron_surface_personas
+    - type: source_pack
+      id: dynaword_municipality_meetings_da
+      family: grounded_dialogue
+      source_language: da
+      source_methods: *source_methods
+      intent_trajectory: Transaction Interaction
+      subtask_trajectory: source_grounded_local_decision_memo
+      difficulty_axis: Danish municipal meeting excerpt with local-decision and omitted-appendix uncertainty
+      volatile_items:
+        - current municipal decision status
+        - omitted appendices or agenda points
+        - user-specific address, case, or deadline facts
+      source_payload_strategies: *source_payload_strategies
+      source_payload_lengths: *source_payload_lengths
+      source_payload_styles: *source_payload_styles
+      source_payload_label_styles: *source_payload_label_styles
+      license: varies by Dynaword source
+      url: https://huggingface.co/datasets/danish-foundation-models/danish-dynaword
+      documents:
+        dataset: danish-foundation-models/danish-dynaword
+        config_name: municipality_meetings
+        split: train
+        streaming: true
+        text_field: text
+        id_field: id
+        source_field: source
+        created_field: created
+        min_chars: 500
+        max_chars: 12000
+        max_records: 512
+      personas: *nemotron_surface_personas
+    - type: source_pack
+      id: dynaword_danske_taler_da
+      family: grounded_dialogue
+      source_language: da
+      source_methods: *source_methods
+      intent_trajectory: Exploratory Interaction
+      subtask_trajectory: source_grounded_rhetorical_analysis
+      difficulty_axis: Danish speech excerpt with speaker-context and interpretation uncertainty
+      volatile_items:
+        - omitted speech context
+        - speaker background or occasion not visible in the excerpt
+        - whether rhetorical interpretations are user-specific
+      source_payload_strategies: *source_payload_strategies
+      source_payload_lengths: *source_payload_lengths
+      source_payload_styles: *source_payload_styles
+      source_payload_label_styles: *source_payload_label_styles
+      license: varies by Dynaword source
+      url: https://huggingface.co/datasets/danish-foundation-models/danish-dynaword
+      documents:
+        dataset: danish-foundation-models/danish-dynaword
+        config_name: danske-taler
+        split: train
+        streaming: true
+        text_field: text
+        id_field: id
+        source_field: source
+        created_field: created
+        min_chars: 500
+        max_chars: 12000
+        max_records: 512
+      personas: *nemotron_surface_personas
+    - type: source_pack
+      id: dynaword_health_hovedstaden_da
+      family: grounded_dialogue
+      source_language: da
+      source_methods: *source_methods
+      intent_trajectory: Health Consultation Interaction
+      subtask_trajectory: source_grounded_health_information
+      difficulty_axis: Danish health-information excerpt with safety and personal-situation limits
+      volatile_items:
+        - current clinical guidance
+        - omitted contraindications
+        - user-specific medical facts
+      source_payload_strategies: *source_payload_strategies
+      source_payload_lengths: *source_payload_lengths
+      source_payload_styles: *source_payload_styles
+      source_payload_label_styles: *source_payload_label_styles
+      license: varies by Dynaword source
+      url: https://huggingface.co/datasets/danish-foundation-models/danish-dynaword
+      documents:
+        dataset: danish-foundation-models/danish-dynaword
+        config_name: health_hovedstaden
+        split: train
+        streaming: true
+        text_field: text
+        id_field: id
+        source_field: source
+        created_field: created
+        min_chars: 500
+        max_chars: 12000
+        max_records: 512
+      personas: *nemotron_surface_personas
+  families:
+    - grounded_dialogue
+  include_preference_pairs: true
+  repair_failed_reviews: true
+  strict_review: true
+  review_accept_threshold: 0.8
+  strict_review_accept_threshold: 0.9
+  shuffle_seeds: true
+  generate_scenario_instances: true
+  source_task_temperature: 0.9
+  scenario_temperature: 0.9
+  blueprint_temperature: 0.5
+  intent_temperature: 0.3
+  skeleton_temperature: 0.4
+  user_temperature: 0.7
+  assistant_temperature: 0.5
+  review_temperature: 0.0
+  preference_temperature: 0.5

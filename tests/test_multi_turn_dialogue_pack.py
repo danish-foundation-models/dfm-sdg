@@ -4,10 +4,56 @@ from pathlib import Path
 
 from sdg.commons.model import LLM
 from sdg.commons.run import load
-from sdg.commons.store import read_jsonl
+from sdg.commons.store import read_jsonl, write_jsonl
 from sdg.commons.utils import read_json, read_yaml
 from sdg.packs.multi_turn_dialogue import build as multi_turn_build
 from sdg.packs.multi_turn_dialogue.build import build, publish, summarize, verify
+
+
+def source_seed_spec_for_tests():
+    seed_spec = {
+        "seed_id": "source-seed::v00",
+        "archetype_id": "source-seed",
+        "scenario_variant": multi_turn_build._scenario_variant(0, variant_count=1),
+        "scenario_variant_index": 0,
+        "scenario_variant_count": 1,
+        "family": "grounded_dialogue",
+        "domain": "source_case",
+        "seed_intent": "explain the source excerpt",
+        "seed_blueprint": {"domain": "source_case", "user_persona": "generic"},
+        "success_criteria": ["use visible source"],
+        "intent_trajectory_hint": "Information Retrieval Interaction",
+        "subtask_trajectory_hint": "source_grounded_synthesis",
+        "query_trajectory_hint": [],
+        "source_methods": list(multi_turn_build.DEFAULT_SOURCE_METHODS),
+        "source_language": "da",
+        "difficulty_axis": "source boundary",
+        "requires_epistemic_hedging": True,
+        "volatile_items": ["current status"],
+        "dialogue_language": "da",
+        "latent_language": "en",
+        "source_grounding": {
+            "pack_id": "dynaword_public_rules_da",
+            "source_name": "retsinformationdk",
+            "document_id": "AA014830",
+            "title": "Pressenævnets kendelse i sag nr. 2024-10933",
+            "created": "2025",
+            "excerpt": (
+                "Pressenævnets kendelse i sag nr. 2024-10933. BPLN.dk får kritik for artiklen "
+                "\"Hvorfor bliver han ved?\"."
+            ),
+            "license": "varies",
+            "url": "https://example.invalid",
+        },
+        "persona_context": {
+            "source": "nvidia/Nemotron-Personas-USA",
+            "id": "persona-1",
+            "persona": "A practical administrative worker who wants concise checklists.",
+        },
+        "external_sources": [],
+    }
+    seed_spec["work_session"] = multi_turn_build._work_session_contract(seed_spec)
+    return seed_spec
 
 
 class FakeDialogueLLM(LLM):
@@ -133,6 +179,23 @@ def test_numbered_block_parser_removes_leading_punctuation_artifact() -> None:
     assert same_line_turns == ["Det her er svaret."]
 
 
+def test_numbered_block_parser_preserves_paragraph_breaks() -> None:
+    turns = multi_turn_build._parse_numbered_blocks(
+        "\n".join(
+            [
+                "ASSISTANT 1: Første afsnit.",
+                "",
+                "Andet afsnit.",
+                "",
+                "- Punkt",
+            ]
+        ),
+        label="ASSISTANT",
+    )
+
+    assert turns == ["Første afsnit.\n\nAndet afsnit.\n\n- Punkt"]
+
+
 def test_handwritten_seed_source_loads_richer_seed_cards() -> None:
     cfg_path = Path(__file__).resolve().parents[1] / "sdg" / "packs" / "multi_turn_dialogue" / "configs" / "base.yaml"
     cfg = read_yaml(cfg_path)
@@ -204,6 +267,846 @@ def test_danish_seed_specs_keep_latent_english_and_visible_danish() -> None:
     assert "required_final_markers" not in specs[0]
 
 
+def test_dynaword_danish_config_samples_broad_source_packs() -> None:
+    cfg_path = (
+        Path(__file__).resolve().parents[1]
+        / "sdg"
+        / "packs"
+        / "multi_turn_dialogue"
+        / "configs"
+        / "dynaword_public_rules_da.yaml"
+    )
+    cfg = read_yaml(cfg_path)
+    sources = [source for source in cfg["generation"]["seed_sources"] if source.get("type") == "source_pack"]
+    source_ids = {source["id"] for source in sources}
+    config_names = {source["documents"]["config_name"] for source in sources}
+
+    assert "dynaword_tidsskrift_dk_da" in source_ids
+    assert "tidsskrift-dk" in config_names
+    assert {
+        "retsinformationdk",
+        "skat",
+        "domsdatabasen",
+        "retspraksis",
+        "eur-lex-sum-da",
+        "tidsskrift-dk",
+        "miljoeportalen",
+        "fm-udgivelser",
+        "ai-aktindsigt",
+        "ft",
+        "ep",
+        "municipality_meetings",
+        "danske-taler",
+        "health_hovedstaden",
+    } <= config_names
+
+
+def test_source_pack_seed_source_pairs_documents_with_personas(tmp_path: Path) -> None:
+    documents_path = tmp_path / "documents.jsonl"
+    personas_path = tmp_path / "personas.jsonl"
+    write_jsonl(
+        [
+            {
+                "id": "doc-1",
+                "source": "skat",
+                "created": "2025-01-01",
+                "text": "Dette er et synligt dansk kildeuddrag om frister og oplysninger. " * 20,
+            },
+            {
+                "id": "doc-2",
+                "source": "ignored",
+                "text": "Denne kilde skal filtreres fra. " * 20,
+            },
+        ],
+        documents_path,
+    )
+    write_jsonl(
+        [
+            {
+                "uuid": "persona-1",
+                "age": 37,
+                "occupation": "bookkeeper",
+                "persona": "A careful person who wants practical checklists.",
+                "professional_persona": "Works with small-business administration.",
+            },
+            {
+                "uuid": "persona-2",
+                "age": 12,
+                "persona": "This minor persona should be filtered by min_age.",
+            },
+        ],
+        personas_path,
+    )
+    generation = {
+        "languages": ["da"],
+        "latent_language": "en",
+        "seed_expansion": {"variants_per_seed": 1},
+        "seed_sources": [
+            {
+                "type": "source_pack",
+                "id": "test_public_rules",
+                "family": "grounded_dialogue",
+                "documents": {
+                    "path": str(documents_path),
+                    "text_field": "text",
+                    "id_field": "id",
+                    "source_field": "source",
+                    "created_field": "created",
+                    "min_chars": 100,
+                    "max_chars": 500,
+                    "max_records": 4,
+                    "include_values": {"source": ["skat"]},
+                },
+                "personas": {
+                    "path": str(personas_path),
+                    "id_field": "uuid",
+                    "persona_fields": ["persona", "professional_persona"],
+                    "min_age": 18,
+                    "max_records": 4,
+                },
+            }
+        ],
+    }
+
+    specs = multi_turn_build._seed_specs(generation)
+
+    assert len(specs) == 1
+    spec = specs[0]
+    assert spec["source_grounding"]["pack_id"] == "test_public_rules"
+    assert spec["source_grounding"]["document_id"] == "doc-1"
+    assert spec["source_grounding"]["source_name"] == "skat"
+    assert spec["persona_context"]["id"] == "persona-1"
+    assert spec["family"] == "grounded_dialogue"
+    assert spec["requires_epistemic_hedging"] is True
+    assert spec["external_sources"][0]["kind"] == "source_excerpt"
+    assert spec["external_sources"][1]["kind"] == "persona_source"
+    assert spec["source_payload_plan"]["strategy"] in multi_turn_build.DEFAULT_SOURCE_PAYLOAD_STRATEGIES
+    assert "This minor persona" not in spec["persona_context"]["persona"]
+
+
+def test_source_excerpt_trimming_preserves_document_formatting() -> None:
+    text = (
+        "\r\n"
+        "§ 1. Overskrift\r\n"
+        "\r\n"
+        "  Stk. 1. Første linje med indrykning.\r\n"
+        "  - punkt A\r\n"
+        "  - punkt B\r\n"
+        "\r\n"
+        "§ 2. Næste afsnit med mere tekst.\r\n"
+    )
+
+    trimmed = multi_turn_build._trim_source_excerpt(text, max_chars=1_000)
+
+    assert trimmed.startswith("§ 1. Overskrift\n\n")
+    assert "  Stk. 1. Første linje med indrykning.\n  - punkt A\n  - punkt B" in trimmed
+    assert "§ 1. Overskrift Stk. 1." not in trimmed
+
+
+def test_source_pack_payload_strategy_varies_across_seed_expansion(tmp_path: Path) -> None:
+    documents_path = tmp_path / "documents.jsonl"
+    personas_path = tmp_path / "personas.jsonl"
+    write_jsonl(
+        [
+            {
+                "id": "doc-1",
+                "source": "skat",
+                "created": "2025-01-01",
+                "text": "Dette er et længere dansk kildeuddrag om frister, beløb og dokumentation. " * 20,
+            }
+        ],
+        documents_path,
+    )
+    write_jsonl(
+        [{"uuid": "persona-1", "age": 42, "persona": "Praktisk bruger med behov for korte svar."}],
+        personas_path,
+    )
+    generation = {
+        "languages": ["da"],
+        "latent_language": "en",
+        "seed_expansion": {"variants_per_seed": 6},
+        "seed_sources": [
+            {
+                "type": "source_pack",
+                "id": "payload_public_rules",
+                "family": "grounded_dialogue",
+                "source_payload_strategies": ["full_excerpt", "selected_clauses", "staged_excerpts"],
+                "source_payload_lengths": ["short", "medium", "long"],
+                "source_payload_styles": ["fenced_text", "blockquote", "plain_delimited"],
+                "source_payload_label_styles": ["excerpt", "pasted_text", "document_passage"],
+                "documents": {
+                    "path": str(documents_path),
+                    "text_field": "text",
+                    "id_field": "id",
+                    "source_field": "source",
+                    "created_field": "created",
+                    "min_chars": 100,
+                    "max_chars": 500,
+                    "max_records": 1,
+                },
+                "personas": {
+                    "path": str(personas_path),
+                    "id_field": "uuid",
+                    "persona_fields": ["persona"],
+                    "min_age": 18,
+                    "max_records": 1,
+                },
+            }
+        ],
+    }
+
+    strategies = {spec["source_payload_plan"]["strategy"] for spec in multi_turn_build._seed_specs(generation)}
+    lengths = {spec["source_payload_plan"]["payload_length"] for spec in multi_turn_build._seed_specs(generation)}
+    styles = {spec["source_payload_plan"]["paste_style"] for spec in multi_turn_build._seed_specs(generation)}
+    label_styles = {spec["source_payload_plan"]["label_style"] for spec in multi_turn_build._seed_specs(generation)}
+
+    assert strategies <= {"full_excerpt", "selected_clauses", "staged_excerpts"}
+    assert len(strategies) > 1
+    assert lengths <= {"short", "medium", "long"}
+    assert styles <= {"fenced_text", "blockquote", "plain_delimited"}
+    assert label_styles <= {"excerpt", "pasted_text", "document_passage"}
+    assert len(label_styles) > 1
+
+
+def test_selected_source_payloads_use_readable_passages() -> None:
+    excerpt = "\n\n".join(
+        [
+            (
+                "13.12.2016 DA Den Europæiske Unions Tidende LI 337/3. Denne indledning beskriver "
+                "retsgrundlaget og forklarer, at læseren skal se bestemmelsen i sammenhæng med resten af teksten."
+            ),
+            (
+                "Artikel 1 fastsætter, at de synlige krav skal vurderes ud fra dokumentets ordlyd. Passagen er lang "
+                "nok til at fungere som selvstændigt kildeuddrag og ikke kun som en citation."
+            ),
+            (
+                "Artikel 2 beskriver dokumentation og opfølgning. Den nævner, at manglende omgivende afsnit kan være "
+                "relevante, når man skal lave en praktisk tjekliste."
+            ),
+        ]
+    )
+
+    payload = multi_turn_build._source_payload_text_for_strategy(
+        "selected_clauses",
+        excerpt,
+        seed_text="doc-1",
+    )
+    row = {
+        "messages": [
+            {
+                "role": "user",
+                "content": f"Kildeuddrag 1:\n```text\n{payload}\n```",
+            }
+        ]
+    }
+    broken_row = {
+        "messages": [
+            {
+                "role": "user",
+                "content": "Kildeuddrag 1:\n```text\nUddrag 1:\n13.\n\nUddrag 2:\n2016 DA\n```",
+            }
+        ]
+    }
+
+    assert "Uddrag 1: 13." not in payload
+    assert multi_turn_build._source_payloads_readable(row)["passed"] is True
+    assert multi_turn_build._source_payloads_readable(broken_row)["passed"] is False
+
+
+def test_source_surface_failures_are_not_assistant_repairable() -> None:
+    seed_spec = source_seed_spec_for_tests()
+    messages = [
+        {
+            "role": "user",
+            "content": "Kildeuddrag 1:\n```text\nUddrag 1:\nDag 1 Kørselspraktik Logbog jf.\n```",
+        },
+        {"role": "assistant", "content": "Jeg laver en tjekliste."},
+    ]
+    review = {
+        "selection": {"accepted": False},
+        "review": {"repair_actions": ["Fix source issue."]},
+    }
+
+    assert multi_turn_build._unrepairable_surface_failures(messages, seed_spec) == ["source_payloads_readable"]
+    assert multi_turn_build._needs_repair(review, messages, seed_spec) is False
+
+
+def test_missing_visible_artifact_failures_are_not_assistant_repairable() -> None:
+    seed_spec = {**source_seed_spec_for_tests(), "source_grounding": None}
+    messages = [
+        {"role": "user", "content": "Her er min kladde. Kan du rette den?"},
+        {"role": "assistant", "content": "Her er en rettet version."},
+    ]
+    review = {
+        "selection": {"accepted": False},
+        "review": {"repair_actions": ["Ask for the draft."]},
+    }
+
+    assert multi_turn_build._unrepairable_surface_failures(messages, seed_spec) == ["visible_artifact_claims_grounded"]
+    assert multi_turn_build._needs_repair(review, messages, seed_spec) is False
+
+
+def test_long_source_payloads_insert_larger_contiguous_text() -> None:
+    paragraphs = [
+        (
+            f"Afsnit {index} beskriver en del af dokumentet med konkrete oplysninger, forbehold og sammenhæng. "
+            "Teksten er lang nok til at ligne et realistisk dokumentuddrag, hvor brugeren kan have brug for hjælp "
+            "til at udlede struktur, ukendte felter og næste skridt."
+        )
+        for index in range(1, 35)
+    ]
+    excerpt = "\n\n".join(paragraphs)
+
+    selected = multi_turn_build._source_payload_text_for_strategy(
+        "selected_clauses",
+        excerpt,
+        seed_text="doc-long",
+        payload_length="long",
+    )
+    window = multi_turn_build._source_payload_text_for_strategy(
+        "long_contiguous_excerpt",
+        excerpt,
+        seed_text="doc-long",
+        payload_length="long",
+    )
+
+    assert len(selected) > 3000
+    assert len(window) > 6000
+
+
+def test_source_payload_paste_styles_restore_and_verify() -> None:
+    seed_spec = source_seed_spec_for_tests()
+    seed_spec["source_payload_plan"] = {
+        "strategy": "full_excerpt",
+        "payload_length": "medium",
+        "paste_style": "plain_delimited",
+        "label_style": "pasted_text",
+    }
+    altered = [
+        {
+            "role": "user",
+            "content": "Kildeuddrag 1 begynder:\nModellen ændrede teksten.\nKildeuddrag 1 slutter.",
+        },
+        {"role": "assistant", "content": "Jeg svarer kun ud fra teksten."},
+    ]
+
+    restored = multi_turn_build._restore_source_payloads_in_messages(seed_spec, altered)
+
+    assert "Modellen ændrede teksten" not in restored[0]["content"]
+    assert "Indsat tekst 1 begynder:" in restored[0]["content"]
+    assert "Pressenævnets kendelse i sag nr. 2024-10933" in restored[0]["content"]
+    assert multi_turn_build._source_payloads_readable({"messages": restored})["passed"] is True
+
+
+def test_source_payload_readability_supports_blockquote_style() -> None:
+    row = {
+        "messages": [
+            {
+                "role": "user",
+                "content": (
+                    "Kildeuddrag 1:\n"
+                    "> Dette er et længere kildeuddrag med nok almindelig tekst til at være læsbart.\n"
+                    "> Det består af flere sætninger og er ikke bare et sagsnummer eller en dato."
+                ),
+            }
+        ]
+    }
+
+    assert multi_turn_build._source_payloads_readable(row)["passed"] is True
+
+
+def test_source_payload_visible_label_can_vary() -> None:
+    slot = multi_turn_build._source_payload_slot(
+        index=1,
+        turn_index=0,
+        strategy="full_excerpt",
+        payload_length="medium",
+        paste_style="fenced_text",
+        label_style="document_passage",
+        text=(
+            "Dette dokumentafsnit indeholder en sammenhængende forklaring med nok almindelige ord til, "
+            "at læsbarhedskontrollen kan behandle det som et reelt indsat tekststykke."
+        ),
+    )
+
+    formatted = multi_turn_build._format_source_payload_slot(slot)
+
+    assert formatted.startswith("Dokumentpassage 1:\n```text\n")
+    assert "Kildeuddrag" not in formatted
+    assert multi_turn_build._source_payloads_readable(
+        {"messages": [{"role": "user", "content": formatted}]}
+    )["passed"] is True
+
+
+def test_source_pack_persona_projection_uses_surface_signals_only(tmp_path: Path) -> None:
+    documents_path = tmp_path / "documents.jsonl"
+    personas_path = tmp_path / "personas.jsonl"
+    write_jsonl(
+        [
+            {
+                "id": "doc-1",
+                "source": "retsinformationdk",
+                "created": "2025-01-01",
+                "text": "Dette er et synligt dansk kildeuddrag om regler og afgørelse. " * 20,
+            }
+        ],
+        documents_path,
+    )
+    write_jsonl(
+        [
+            {
+                "uuid": "persona-1",
+                "age": 28,
+                "occupation": "fast_food_or_counter_worker",
+                "education_level": "high_school",
+                "city": "Madison",
+                "country": "USA",
+                "persona": "Mary Alberti is a bullet-journal aficionado from Madison, Wisconsin.",
+                "professional_persona": "Mary wants to become a restaurant manager in the Midwest.",
+                "skills_and_expertise_list": ["Cash handling", "Inventory management", "Customer service"],
+            }
+        ],
+        personas_path,
+    )
+    generation = {
+        "languages": ["da"],
+        "latent_language": "en",
+        "seed_expansion": {"variants_per_seed": 1},
+        "seed_sources": [
+            {
+                "type": "source_pack",
+                "id": "projected_public_rules",
+                "family": "grounded_dialogue",
+                "documents": {
+                    "path": str(documents_path),
+                    "text_field": "text",
+                    "id_field": "id",
+                    "source_field": "source",
+                    "created_field": "created",
+                    "min_chars": 100,
+                    "max_chars": 500,
+                    "max_records": 1,
+                },
+                "personas": {
+                    "path": str(personas_path),
+                    "id_field": "uuid",
+                    "min_age": 18,
+                    "max_records": 1,
+                    "projection": {
+                        "enabled": True,
+                        "target_locale": "da-DK",
+                        "occupation_field": "occupation",
+                        "education_field": "education_level",
+                        "age_field": "age",
+                        "include_skill_tags": True,
+                        "skill_tags_field": "skills_and_expertise_list",
+                        "max_skill_tags": 2,
+                    },
+                },
+            }
+        ],
+    }
+
+    spec = multi_turn_build._seed_specs(generation)[0]
+    persona = spec["persona_context"]
+    persona_blob = str(persona)
+
+    assert persona["projection_mode"] == "surface"
+    assert persona["surface"]["role_archetype"] == "fast food or counter worker"
+    assert persona["surface"]["age_band"] == "adult_25_34"
+    assert persona["surface"]["target_locale"] == "da-DK"
+    assert persona["surface"]["skill_tags"] == ["Cash handling", "Inventory management"]
+    assert "Mary" not in persona_blob
+    assert "Madison" not in persona_blob
+    assert "Wisconsin" not in persona_blob
+    assert "USA" not in persona_blob
+    assert "Midwest" not in persona_blob
+    assert "Projected surface persona" in spec["seed_blueprint"]["user_persona"]
+
+
+def test_source_task_planner_turns_source_and_persona_into_archetype() -> None:
+    class SourceTaskPlannerLLM(LLM):
+        def __init__(self):
+            super().__init__(model="fake-source-task-planner", base_url="https://example.invalid", api_key_env=None)
+            self.prompt = ""
+
+        def chat(self, messages, **gen):
+            self.prompt = "\n".join(message["content"] for message in messages)
+            return "\n".join(
+                [
+                    "SOURCE_TASK_DOMAIN: tax_checklist_from_visible_excerpt",
+                    "SOURCE_TASK_FAMILY: grounded_dialogue",
+                    "SOURCE_TASK_INTENT_TRAJECTORY: Information Retrieval Interaction",
+                    "SOURCE_TASK_SUBTASK_TRAJECTORY: source_grounded_checklist",
+                    "SOURCE_TASK_DIFFICULTY_AXIS: visible tax excerpt with missing dates and current-status uncertainty",
+                    "SOURCE_TASK_PERSONA: Danish freelancer who wants a cautious checklist, inspired by the sampled persona.",
+                    "SOURCE_TASK_GOAL: understand what the pasted tax excerpt can and cannot answer",
+                    "SOURCE_TASK_QUERY_TRAJECTORY: paste excerpt and ask meaning; add dates and amount; request checklist",
+                    "SOURCE_TASK_SUCCESS_CRITERIA:",
+                    "- uses only the visible excerpt for source-specific claims",
+                    "- marks current status and unseen rules as unknown",
+                    "- produces a practical checklist",
+                    "SOURCE_TASK_VOLATILE_ITEMS: current tax guidance; unseen surrounding rules",
+                    "SOURCE_TASK_BLUEPRINT:",
+                    "The user should paste the excerpt first, reveal dates later, and ask for a final checklist.",
+                ]
+            )
+
+    seed_spec = {
+        "seed_id": "source-seed::v00",
+        "archetype_id": "source-seed",
+        "scenario_variant": multi_turn_build._scenario_variant(0, variant_count=1),
+        "scenario_variant_index": 0,
+        "scenario_variant_count": 1,
+        "family": "grounded_dialogue",
+        "domain": "skat",
+        "seed_intent": "plan from source",
+        "seed_blueprint": {"domain": "skat", "user_persona": "generic"},
+        "success_criteria": ["use visible source"],
+        "intent_trajectory_hint": "Information Retrieval Interaction",
+        "subtask_trajectory_hint": "source_grounded_synthesis",
+        "query_trajectory_hint": [],
+        "source_methods": list(multi_turn_build.DEFAULT_SOURCE_METHODS),
+        "source_language": "da",
+        "difficulty_axis": "source boundary",
+        "requires_epistemic_hedging": True,
+        "volatile_items": ["current status"],
+        "dialogue_language": "da",
+        "latent_language": "en",
+        "source_grounding": {
+            "pack_id": "dynaword_public_rules_da",
+            "source_name": "skat",
+            "document_id": "doc-1",
+            "title": "Tax excerpt",
+            "created": "2025",
+            "excerpt": "Synligt dansk kildeuddrag om skat.",
+        },
+        "persona_context": {
+            "source": "nvidia/Nemotron-Personas-USA",
+            "persona": "A practical administrative worker from the sampled persona source.",
+        },
+        "external_sources": [],
+    }
+    seed_spec["work_session"] = multi_turn_build._work_session_contract(seed_spec)
+    llm = SourceTaskPlannerLLM()
+
+    planned = multi_turn_build._generate_source_task_plan_if_needed(
+        llm,
+        seed_spec,
+        {"source_task_temperature": 0.9},
+    )
+
+    assert "Sampled persona/context" in llm.prompt
+    assert "Synligt dansk kildeuddrag om skat." in llm.prompt
+    assert "Do not copy US locations" in llm.prompt
+    assert "source excerpt and metadata are immutable inputs" in llm.prompt
+    assert "Do not invent, rename, anonymize" in llm.prompt
+    assert "Do not copy the sampled persona's name" in llm.prompt
+    assert "abstract them into a localized Danish user role" in llm.prompt
+    assert planned["domain"] == "tax_checklist_from_visible_excerpt"
+    assert planned["intent_trajectory_hint"] == "Information Retrieval Interaction"
+    assert planned["subtask_trajectory_hint"] == "source_grounded_checklist"
+    assert planned["query_trajectory_hint"] == [
+        "paste the source excerpt and ask for initial source grounded checklist",
+        "add user-owned context, constraint, or intended use",
+        "ask for a revised or final source-bounded deliverable with unknowns separated",
+    ]
+    assert "the assistant only treats source details as known after the relevant source payload is visible" in planned["success_criteria"]
+    assert "the assistant does not assume the pasted excerpt is complete, current, or exhaustive" in planned["success_criteria"]
+    assert "use visible source" in planned["success_criteria"]
+    assert planned["seed_blueprint"]["source_context"]["source_pack"] == "dynaword_public_rules_da"
+    assert planned["seed_blueprint"]["source_context"]["source_text_available_to_visible_dialogue_only_via_injected_payload"] is True
+    assert "visible_source_excerpt" not in planned["seed_blueprint"]
+    assert planned["source_task_plan"]["blueprint"].startswith("The user should paste")
+    assert planned["work_session"]["top_level_intent"] == "Information Retrieval Interaction"
+
+
+def test_source_task_parser_accepts_markdown_labels_and_configured_intent_fallback() -> None:
+    seed_spec = {
+        "seed_blueprint": {"user_persona": "generic"},
+        "source_grounding": {
+            "pack_id": "dynaword_public_rules_da",
+            "source_name": "retsinformationdk",
+            "document_id": "doc-1",
+            "title": "",
+            "created": "",
+            "excerpt": "Synligt kildeuddrag.",
+        },
+        "persona_context": {},
+        "success_criteria": ["use visible source"],
+        "intent_trajectory_hint": "Information Retrieval Interaction",
+        "subtask_trajectory_hint": "source_grounded_synthesis",
+        "scenario_variant": multi_turn_build._scenario_variant(0, variant_count=1),
+    }
+    plan = multi_turn_build._parse_source_task_plan(
+        "\n".join(
+            [
+                "**SOURCE_TASK_DOMAIN**",
+                "Medieetik og pressekundskab",
+                "**SOURCE_TASK_FAMILY**: retsinformationdk",
+                "**SOURCE_TASK_INTENT_TRAJECTORY**: Explain and extract obligations from a regulatory decision",
+                "**SOURCE_TASK_SUBTASK_TRAJECTORY**",
+                "Identificere kritikpunkter",
+                "**SOURCE_TASK_PERSONA**: Praktisk bruger",
+                "**SOURCE_TASK_GOAL**: Forstå et synligt uddrag",
+                "**SOURCE_TASK_QUERY_TRAJECTORY**: paste excerpt; ask checklist",
+                "**SOURCE_TASK_SUCCESS_CRITERIA**:",
+                "- use visible source only",
+                "- preserve uncertainty",
+                "**SOURCE_TASK_VOLATILE_ITEMS**: current status; unseen rules",
+                "**SOURCE_TASK_BLUEPRINT**:",
+                "The user should paste the excerpt first.",
+            ]
+        )
+    )
+    planned = multi_turn_build._apply_source_task_plan(seed_spec, plan)
+
+    assert plan["domain"] == "medieetik_og_pressekundskab"
+    assert plan["subtask_trajectory"] == "identificere_kritikpunkter"
+    assert planned["family"] == "grounded_dialogue"
+    assert planned["intent_trajectory_hint"] == "Information Retrieval Interaction"
+    assert planned["query_trajectory_hint"] == [
+        "paste the source excerpt and ask for initial identificere kritikpunkter",
+        "add user-owned context, constraint, or intended use",
+        "ask for a revised or final source-bounded deliverable with unknowns separated",
+    ]
+    assert "use visible source" in planned["success_criteria"]
+
+
+def test_source_grounding_generation_prompts_withhold_source_reference() -> None:
+    seed_spec = source_seed_spec_for_tests()
+    blueprint = {"artifact": "Hidden blueprint artifact."}
+    intent_model = {"artifact": "Intent artifact."}
+    skeleton = [
+        {"role": "user", "dialogue_act": "paste_source", "state_delta": "source visible"},
+        {"role": "assistant", "dialogue_act": "explain_source", "state_delta": "bounded explanation"},
+    ]
+
+    scenario_prompt = "\n".join(message["content"] for message in multi_turn_build._scenario_instance_messages(seed_spec))
+    blueprint_prompt = "\n".join(message["content"] for message in multi_turn_build._blueprint_messages(seed_spec))
+    user_prompt = "\n".join(
+        message["content"]
+        for message in multi_turn_build._user_simulator_messages(seed_spec, blueprint, intent_model, skeleton)
+    )
+
+    for prompt in [scenario_prompt, blueprint_prompt]:
+        assert "Source-grounding rule" in prompt
+        assert "Pressenævnets kendelse i sag nr. 2024-10933" not in prompt
+        assert "BPLN.dk får kritik" not in prompt
+        assert "Source context for task shape only" in prompt
+        assert "do not invent, rename, anonymize, or alter source-specific" in prompt
+        assert "Persona context is only a diversity vector" in prompt
+    assert "Source-pack user-simulation rule" in user_prompt
+    assert "do not reproduce, paraphrase as if quoted, shorten, translate, or repair" in user_prompt
+    assert "{{SOURCE_PAYLOAD_1}}" in user_prompt
+    assert "Pressenævnets kendelse i sag nr. 2024-10933" not in user_prompt
+    assert "BPLN.dk får kritik" not in user_prompt
+    assert "Source visibility plan" in scenario_prompt
+    assert "Source visibility plan" in blueprint_prompt
+    assert "Sampled source visibility plan" in user_prompt
+
+
+def test_user_turn_generation_injects_source_payload_directly() -> None:
+    class PlaceholderUserLLM(LLM):
+        def __init__(self):
+            super().__init__(model="fake-placeholder-user", base_url="https://example.invalid", api_key_env=None)
+
+        def chat(self, messages, **gen):
+            return (
+                "USER 1: Jeg har et uddrag her.\n\n{{SOURCE_PAYLOAD_1}}\n\n"
+                "Kan du forklare, hvad kritikken går på?"
+            )
+
+    seed_spec = source_seed_spec_for_tests()
+    skeleton = [{"role": "user", "dialogue_act": "paste_source", "state_delta": "source visible"}]
+
+    turns = multi_turn_build._generate_user_turns(
+        PlaceholderUserLLM(),
+        seed_spec,
+        {"artifact": "Hidden blueprint artifact."},
+        {"artifact": "Intent artifact."},
+        skeleton,
+        {"user_temperature": 0.7},
+    )
+
+    assert "{{SOURCE_PAYLOAD_1}}" not in turns[0]
+    assert "Uddrag 1:" in turns[0]
+    assert "Pressenævnets kendelse i sag nr. 2024-10933" in turns[0]
+    assert "BPLN.dk får kritik" in turns[0]
+
+
+def test_user_turn_generation_regenerates_wrong_turn_count() -> None:
+    class RegeneratingUserLLM(LLM):
+        def __init__(self):
+            super().__init__(model="fake-regenerate-user", base_url="https://example.invalid", api_key_env=None)
+            self.prompts: list[str] = []
+
+        def chat(self, messages, **gen):
+            self.prompts.append(messages[-1]["content"])
+            if "Regenerate all user turns" in messages[-1]["content"]:
+                return "\n".join(
+                    [
+                        "USER 1: Første besked.",
+                        "USER 2: Anden besked.",
+                        "USER 3: Tredje besked.",
+                    ]
+                )
+            return "USER 1: Første besked.\nAnden og tredje besked blev slået sammen."
+
+    skeleton = [
+        {"role": "user", "dialogue_act": "initial", "state_delta": "first"},
+        {"role": "assistant", "dialogue_act": "respond", "state_delta": "response"},
+        {"role": "user", "dialogue_act": "followup", "state_delta": "second"},
+        {"role": "assistant", "dialogue_act": "respond", "state_delta": "response"},
+        {"role": "user", "dialogue_act": "final_request", "state_delta": "third"},
+        {"role": "assistant", "dialogue_act": "final", "state_delta": "done"},
+    ]
+    llm = RegeneratingUserLLM()
+
+    turns = multi_turn_build._generate_user_turns(
+        llm,
+        {
+            "domain": "test",
+            "dialogue_language": "da",
+            "latent_language": "en",
+            "scenario_variant": {"id": "test"},
+            "work_session": {"fit": "Problem Solving Interaction > planning"},
+            "query_trajectory_hint": [],
+            "success_criteria": ["three user turns"],
+        },
+        {"artifact": "Blueprint."},
+        {"artifact": "Intent.", "user_query_plan_steps": []},
+        skeleton,
+        {"user_temperature": 0.7},
+    )
+
+    assert turns == ["Første besked.", "Anden besked.", "Tredje besked."]
+    assert len(llm.prompts) == 2
+    assert "Incomplete draft output" in llm.prompts[1]
+
+
+def test_source_payload_restore_preserves_exact_inserted_text_after_polish() -> None:
+    seed_spec = source_seed_spec_for_tests()
+    altered = [
+        {
+            "role": "user",
+            "content": 'Kildeuddrag 1:\n```text\nPressenævnets sag blev omskrevet af modellen.\n```',
+        },
+        {"role": "assistant", "content": "Jeg svarer kun ud fra teksten."},
+    ]
+
+    restored = multi_turn_build._restore_source_payloads_in_messages(seed_spec, altered)
+
+    assert "Pressenævnets sag blev omskrevet" not in restored[0]["content"]
+    assert "Pressenævnets kendelse i sag nr. 2024-10933" in restored[0]["content"]
+    assert "BPLN.dk får kritik" in restored[0]["content"]
+
+
+def test_staged_source_payloads_are_inserted_across_turns() -> None:
+    seed_spec = source_seed_spec_for_tests()
+    seed_spec["source_grounding"]["excerpt"] = "Første del handler om fristen. Anden del handler om dokumentation."
+    seed_spec["source_payload_plan"] = multi_turn_build._source_payload_plan_for_seed(
+        {"source_payload_strategies": ["staged_excerpts"]},
+        archetype_id="source-seed",
+        variant_index=0,
+    )
+    turns = [
+        "Jeg starter med første del.\n\n{{SOURCE_PAYLOAD_1}}\n\nHvad betyder den?",
+        "Okay, det giver mening.",
+        "Her er næste del.\n\n{{SOURCE_PAYLOAD_2}}\n\nKan du lave en samlet liste?",
+    ]
+
+    injected = multi_turn_build._inject_source_payloads(seed_spec, turns)
+
+    assert "Første del handler om fristen." in injected[0]
+    assert "Anden del handler om dokumentation." in injected[2]
+    assert "{{SOURCE_PAYLOAD_" not in "\n".join(injected)
+
+
+def test_source_grounding_review_prompts_compare_against_original_reference() -> None:
+    seed_spec = source_seed_spec_for_tests()
+    blueprint = {"artifact": "Hidden blueprint artifact."}
+    intent_model = {"artifact": "Intent artifact."}
+    skeleton = [
+        {"role": "user", "dialogue_act": "paste_source", "state_delta": "source visible"},
+        {"role": "assistant", "dialogue_act": "explain_source", "state_delta": "bounded explanation"},
+    ]
+    messages = [
+        {"role": "user", "content": "Her er uddraget: Pressenævnets kendelse i sag nr. 2024-10933."},
+        {"role": "assistant", "content": "Det kan jeg forklare ud fra det synlige uddrag."},
+    ]
+
+    review_prompt = "\n".join(
+        message["content"]
+        for message in multi_turn_build._review_messages(seed_spec, blueprint, intent_model, skeleton, messages)
+    )
+    strict_prompt = "\n".join(
+        message["content"]
+        for message in multi_turn_build._strict_review_messages(seed_spec, blueprint, intent_model, skeleton, messages)
+    )
+
+    for prompt in [review_prompt, strict_prompt]:
+        assert "Source-pack review rule" in prompt
+        assert "Pressenævnets kendelse i sag nr. 2024-10933" in prompt
+        assert "Fail source_boundary if a visible user payload or assistant answer mutates" in prompt
+        assert "not assistant-visible evidence" in prompt
+        assert "before that fact appears in prior visible user text" in prompt
+        assert "irrelevant foreign persona names, places, currency, institutions" in prompt
+
+
+def test_source_grounding_skeleton_prompt_keeps_assistant_steps_procedural() -> None:
+    seed_spec = source_seed_spec_for_tests()
+    blueprint = {
+        "artifact": "Hidden source fact: the case number is 2024-10933 and the publication title is source-owned."
+    }
+    intent_model = {"artifact": "USER_QUERY_PLAN: paste source; ask for checklist"}
+
+    skeleton_prompt = "\n".join(
+        message["content"]
+        for message in multi_turn_build._skeleton_messages(seed_spec, blueprint, intent_model)
+    )
+
+    assert "Source-pack skeleton rule" in skeleton_prompt
+    assert "plan source visibility according to the sampled source payload plan" in skeleton_prompt
+    assert "Sampled source visibility plan" in skeleton_prompt
+    assert "Do not put hidden source facts into assistant dialogue acts" in skeleton_prompt
+    assert "Bad assistant purpose" in skeleton_prompt
+    assert "Good assistant purpose" in skeleton_prompt
+
+
+def test_source_grounding_is_kept_in_hidden_verification() -> None:
+    seed_spec = source_seed_spec_for_tests()
+    blueprint = {"domain": "source_case", "artifact": "Hidden blueprint artifact."}
+    intent_model = {
+        "trajectory": "Information Retrieval Interaction",
+        "subtask_trajectory": "source_grounded_synthesis",
+        "user_query_plan_steps": ["paste source"],
+    }
+    skeleton = [
+        {"role": "user", "dialogue_act": "paste_source", "state_delta": "source visible"},
+        {"role": "assistant", "dialogue_act": "explain_source", "state_delta": "bounded explanation"},
+    ]
+    messages = [
+        {"role": "user", "content": "Her er uddraget: Pressenævnets kendelse i sag nr. 2024-10933."},
+        {"role": "assistant", "content": "Det kan jeg forklare ud fra det synlige uddrag."},
+    ]
+    review = {"review": {}, "selection": {"accepted": True, "score": 0.95}}
+
+    row = multi_turn_build._row_from_generated_parts(
+        row_id="source-row-1",
+        seed_spec=seed_spec,
+        blueprint=blueprint,
+        intent_model=intent_model,
+        skeleton=skeleton,
+        messages=messages,
+        review=review,
+    )
+
+    source_grounding = row["hidden"]["verification"]["source_grounding"]
+    assert source_grounding["document_id"] == "AA014830"
+    assert source_grounding["excerpt"].startswith("Pressenævnets kendelse i sag nr. 2024-10933")
+
+
 def test_scenario_variants_drive_variable_turn_count() -> None:
     seed_spec = {
         "domain": "event_planning",
@@ -253,6 +1156,118 @@ def test_scenario_variants_drive_variable_turn_count() -> None:
     assert "USER 5:" in user_prompt
     assert "Use one labeled block per user turn" in user_prompt
     assert "Only sparse_opening may be a very short opening" in user_prompt
+
+
+def test_skeleton_generation_repairs_wrong_step_count() -> None:
+    class SkeletonRepairLLM(LLM):
+        def __init__(self):
+            super().__init__(model="fake-skeleton-repair", base_url="https://example.invalid", api_key_env=None)
+            self.prompts: list[str] = []
+
+        def chat(self, messages, **gen):
+            prompt = messages[-1]["content"]
+            self.prompts.append(prompt)
+            if "Rewrite the draft skeleton" in prompt:
+                return "\n".join(
+                    [
+                        "STEP 1: user | initial_request | visible task context appears",
+                        "STEP 2: assistant | produce_initial_work | first useful output appears",
+                        "STEP 3: user | add_constraint | new requirement becomes visible",
+                        "STEP 4: assistant | revise_work | revised work product appears",
+                        "STEP 5: user | ask_comparison | comparison criterion becomes visible",
+                        "STEP 6: assistant | compare_options | comparison output appears",
+                        "STEP 7: user | request_final | final format requirement becomes visible",
+                        "STEP 8: assistant | finalize | final deliverable appears",
+                    ]
+                )
+            return "\n".join(
+                [
+                    "STEP 1: user | initial_request | visible task context appears",
+                    "STEP 2: assistant | produce_initial_work | first useful output appears",
+                    "STEP 3: user | add_constraint | new requirement becomes visible",
+                    "STEP 4: assistant | revise_work | revised work product appears",
+                    "STEP 5: user | ask_comparison | comparison criterion becomes visible",
+                    "STEP 6: assistant | compare_options | comparison output appears",
+                    "STEP 7: user | request_final | final format requirement becomes visible",
+                ]
+            )
+
+    seed_spec = {
+        "domain": "editing",
+        "dialogue_language": "da",
+        "latent_language": "en",
+        "scenario_variant": {"target_user_turns": 4},
+        "work_session": {
+            "top_level_intent": "Transaction Interaction",
+            "subtask_trajectory": "refinement_interaction",
+            "work_session_type": "bounded_artifact_completion_session",
+        },
+    }
+    blueprint = {"artifact": "Hidden goal: revise a short application text."}
+    intent_model = {"artifact": "USER_QUERY_PLAN: initial request; constraint; comparison; final"}
+    llm = SkeletonRepairLLM()
+
+    skeleton = multi_turn_build._generate_skeleton(
+        llm,
+        seed_spec,
+        blueprint,
+        intent_model,
+        {"skeleton_temperature": 0.4},
+    )
+
+    assert len(skeleton) == 8
+    assert [step["role"] for step in skeleton] == multi_turn_build._expected_skeleton_roles(seed_spec)
+    assert len(llm.prompts) == 2
+    assert "Required role order: user, assistant, user, assistant" in llm.prompts[1]
+
+
+def test_skeleton_generation_falls_back_to_intent_plan_after_failed_repairs() -> None:
+    class BadSkeletonLLM(LLM):
+        def __init__(self):
+            super().__init__(model="fake-bad-skeleton", base_url="https://example.invalid", api_key_env=None)
+            self.prompts: list[str] = []
+
+        def chat(self, messages, **gen):
+            self.prompts.append(messages[-1]["content"])
+            return "\n".join(
+                [
+                    "STEP 1: user | collapsed_initial | first and second user moves are merged",
+                    "STEP 2: assistant | collapsed_response | first and second assistant moves are merged",
+                    "STEP 3: user | collapsed_followup | third and fourth user moves are merged",
+                    "STEP 4: assistant | collapsed_final | third and fourth assistant moves are merged",
+                ]
+            )
+
+    seed_spec = {
+        "domain": "editing",
+        "dialogue_language": "da",
+        "latent_language": "en",
+        "scenario_variant": {"target_user_turns": 4},
+        "work_session": {
+            "top_level_intent": "Transaction Interaction",
+            "subtask_trajectory": "refinement_interaction",
+            "work_session_type": "bounded_artifact_completion_session",
+        },
+    }
+    blueprint = {"artifact": "Hidden goal: revise a short application text."}
+    intent_model = {
+        "artifact": "USER_QUERY_PLAN: paste draft; add tone constraint; request comparison; final polish",
+        "user_query_plan_steps": ["paste draft", "add tone constraint", "request comparison", "final polish"],
+    }
+    llm = BadSkeletonLLM()
+
+    skeleton = multi_turn_build._generate_skeleton(
+        llm,
+        seed_spec,
+        blueprint,
+        intent_model,
+        {"skeleton_temperature": 0.4},
+    )
+
+    assert len(llm.prompts) == 3
+    assert [step["role"] for step in skeleton] == multi_turn_build._expected_skeleton_roles(seed_spec)
+    assert skeleton[0]["dialogue_act"] == "paste_draft"
+    assert skeleton[-1]["dialogue_act"] == "finalize_work_product"
 
 
 def test_visible_entity_grounding_uses_visible_user_terms() -> None:
@@ -386,6 +1401,7 @@ def test_generator_and_reviewer_share_general_epistemic_policy() -> None:
     assert "only ask broad slot-filling questions" in reviewer_prompt
     assert "Reject zero-information first turns" in reviewer_prompt
     assert "Reject assistant turns that use emojis" in reviewer_prompt
+    assert "checkmark/cross/warning symbols" in reviewer_prompt
     assert "seed-specific current fare marker" not in assistant_prompt
     assert "seed-specific current fare marker" not in reviewer_prompt
 
@@ -452,8 +1468,11 @@ def test_generator_and_reviewer_share_discourse_quality_policy() -> None:
     assert "silently going along with the oddity" in reviewer_prompt
     assert "recover by asking a concise clarification" in assistant_prompt
     assert "Assistant turns should not use emojis" in assistant_prompt
-    assert "Avoid markdown emphasis" in assistant_prompt
-    assert "Use restrained plain-text formatting" in assistant_prompt
+    assert "checkmark/cross/warning symbols" in assistant_prompt
+    assert "Use light, functional formatting" in assistant_prompt
+    assert "structurally valid Markdown" in assistant_prompt
+    assert "Use bold sparingly" in assistant_prompt
+    assert "Avoid decorative formatting" in assistant_prompt
     assert "may be vague, partial, or reasonably informative" in user_prompt
     assert "do not make every conversation start with underspecification" in user_prompt
     assert "The first user turn should normally contain at least one useful work payload" in user_prompt
@@ -463,6 +1482,9 @@ def test_generator_and_reviewer_share_discourse_quality_policy() -> None:
     assert "include a short visible payload in that same turn" in user_prompt
     assert "If a needed artifact is missing, ask for it" in assistant_prompt
     assert "preserve missing details as unknown fields" in assistant_prompt
+    assert "time estimates as rough suggestions to try" in assistant_prompt
+    assert "root causes and compatibility explanations as hypotheses" in assistant_prompt
+    assert "Technical troubleshooting should distinguish visible evidence from hypotheses" in assistant_prompt
     assert "Reject missing visible artifacts" in reviewer_prompt
     assert "Reject unsupported quoted edits" in reviewer_prompt
     assert "unsupported reaction" in reviewer_prompt
@@ -472,8 +1494,9 @@ def test_generator_and_reviewer_share_discourse_quality_policy() -> None:
     assert "official localized term is uncertain" in reviewer_prompt
     assert "Do not mix English words into Danish prose" in user_prompt
     assert "do not invent literal compounds" in user_prompt
-    assert "markdown-heavy assistant turns" in reviewer_prompt
-    assert "horizontal rules" in reviewer_prompt
+    assert "light functional formatting" in reviewer_prompt
+    assert "Bold should be sparse" in reviewer_prompt
+    assert "verification instruction is not a verified claim" in reviewer_prompt
 
 
 def test_strict_review_prompt_and_parser_reject_source_dependent_overreach() -> None:
@@ -521,11 +1544,84 @@ def test_strict_review_prompt_and_parser_reject_source_dependent_overreach() -> 
 
     assert "Run a strict audit of this dialogue" in prompt
     assert "Stable public knowledge is allowed" in prompt
+    assert "material, reject-worthy issues" in prompt
+    assert "Do not fail merely because the assistant suggests a reasonable new option" in prompt
+    assert "allow direct paraphrases and clearly marked interpretations" in prompt
+    assert "Do not fail normal multi-turn revision after newly visible user constraints" in prompt
     assert "Entertainment rows are not exempt" in prompt
+    assert "Do not fail source_boundary merely because the assistant tells the user to check documentation" in prompt
+    assert "Allow light functional formatting" in prompt
+    assert "structurally valid Markdown spacing" in prompt
+    assert "Bold should be sparse" in prompt
     assert "strict audit" in prompt
     assert strict["accepted"] is False
     assert strict["checks"][0]["passed"] is False
     assert strict["repair_actions"]
+
+
+def test_strict_review_parser_accepts_verification_advice() -> None:
+    strict = multi_turn_build._parse_strict_review(
+        "\n".join(
+            [
+                "STRICT_SELECTION: PASS",
+                "STRICT_SCORE: 0.93",
+                "STRICT_CHECK source_boundary: PASS - the assistant asks the user to check release notes and package metadata, without claiming what they contain",
+                "STRICT_CHECK language_quality: PASS - clean Danish",
+                "STRICT_CHECK factuality: PASS - no suspicious facts",
+                "STRICT_CHECK contradiction: PASS - no contradiction",
+                "STRICT_CHECK format: PASS - light functional formatting",
+                "STRICT_REPAIR_ACTIONS: none",
+            ]
+        ),
+        threshold=0.9,
+    )
+
+    assert strict["accepted"] is True
+    assert strict["checks"][0]["passed"] is True
+
+
+def test_strict_review_parser_accepts_comma_delimited_fields() -> None:
+    strict = multi_turn_build._parse_strict_review(
+        "\n".join(
+            [
+                "STRICT_SELECTION, FAIL",
+                "STRICT_SCORE, 0.4",
+                "STRICT_CHECK source_boundary, FAIL - unhedged source-dependent claim",
+                "STRICT_CHECK language_quality, PASS - clean Danish",
+                "STRICT_CHECK factuality, PASS - no suspicious facts",
+                "STRICT_CHECK contradiction, PASS - no contradiction",
+                "STRICT_CHECK format, PASS - light functional formatting",
+                "STRICT_REPAIR_ACTIONS, Hedge the claim.",
+            ]
+        ),
+        threshold=0.9,
+    )
+
+    assert strict["accepted"] is False
+    assert strict["score"] == 0.4
+    assert strict["checks"][0]["passed"] is False
+    assert strict["repair_actions"] == ["Hedge the claim."]
+
+
+def test_strict_review_parser_accepts_whitespace_fields_and_none_dash_actions() -> None:
+    strict = multi_turn_build._parse_strict_review(
+        "\n".join(
+            [
+                "STRICT_SELECTION PASS",
+                "STRICT_SCORE 1.0",
+                "STRICT_CHECK source_boundary PASS - source-bounded",
+                "STRICT_CHECK language_quality PASS - clean Danish",
+                "STRICT_CHECK factuality PASS - no suspicious facts",
+                "STRICT_CHECK contradiction PASS - no contradiction",
+                "STRICT_CHECK format PASS - light functional formatting",
+                "STRICT_REPAIR_ACTIONS NONE \u2013 all checks passed",
+            ]
+        ),
+        threshold=0.9,
+    )
+
+    assert strict["accepted"] is True
+    assert strict["repair_actions"] == []
 
 
 def test_surface_polish_prompt_and_parser_preserve_turn_structure() -> None:
@@ -560,8 +1656,11 @@ def test_surface_polish_prompt_and_parser_preserve_turn_structure() -> None:
     assert "generic description rather than a precise-sounding invented label" in prompt
     assert "accidental English words in prose" in prompt
     assert "No turn content may contain USER n: or ASSISTANT n: labels" in prompt
-    assert "Remove emojis and decorative emoji bullets" in prompt
-    assert "Remove excessive markdown bold/italic emphasis" in prompt
+    assert "Remove emojis, decorative emoji bullets, and checkmark/cross/warning symbols" in prompt
+    assert "Keep functional paragraph breaks" in prompt
+    assert "structurally valid" in prompt
+    assert "Use bold sparingly" in prompt
+    assert "Remove excessive emphasis" in prompt
     assert "do not create ad hoc" in prompt
     assert "Check Danish agreement" in prompt
     assert polished is not None
@@ -575,6 +1674,28 @@ def test_surface_polish_prompt_and_parser_preserve_turn_structure() -> None:
         )
         is None
     )
+
+
+def test_parse_polished_messages_preserves_paragraph_breaks() -> None:
+    messages = [
+        {"role": "user", "content": "Kan du lave et kort notat?"},
+        {"role": "assistant", "content": "Første afsnit.\n\nAndet afsnit."},
+    ]
+
+    polished = multi_turn_build._parse_polished_messages(
+        "\n".join(
+            [
+                "USER 1: Kan du lave et kort notat?",
+                "ASSISTANT 1: Første afsnit.",
+                "",
+                "Andet afsnit.",
+            ]
+        ),
+        messages,
+    )
+
+    assert polished is not None
+    assert polished[1]["content"] == "Første afsnit.\n\nAndet afsnit."
 
 
 def test_surface_polish_reformat_prompt_restores_exact_labels() -> None:
@@ -609,13 +1730,24 @@ def test_no_role_label_leak_blocks_embedded_labels() -> None:
     assert multi_turn_build._no_role_label_leak(leaking_row)["passed"] is False
 
 
-def test_assistant_format_restrained_blocks_markdown_and_emojis() -> None:
+def test_assistant_format_restrained_allows_markdown_and_blocks_emojis() -> None:
     clean_row = {"messages": [{"role": "assistant", "content": "Her er tre korte punkter:\n- Første\n- Andet"}]}
-    markdown_row = {"messages": [{"role": "assistant", "content": "**Plan**\n---\n| A | B |"}]}
+    light_markdown_row = {
+        "messages": [
+            {
+                "role": "assistant",
+                "content": "## Kort plan\n\n| Trin | Gør |\n| --- | --- |\n| 1 | Tjek kilden |\n\n**Kort sagt:** brug det som udkast.",
+            }
+        ]
+    }
+    repeated_separator_row = {"messages": [{"role": "assistant", "content": "Plan\n---\nDetaljer\n---"}]}
+    heading_stack_row = {"messages": [{"role": "assistant", "content": "# A\n## B\n### C\nTekst"}]}
     emoji_row = {"messages": [{"role": "assistant", "content": "God ide ✅"}]}
 
     assert multi_turn_build._assistant_format_restrained(clean_row)["passed"] is True
-    assert multi_turn_build._assistant_format_restrained(markdown_row)["passed"] is False
+    assert multi_turn_build._assistant_format_restrained(light_markdown_row)["passed"] is True
+    assert multi_turn_build._assistant_format_restrained(repeated_separator_row)["passed"] is True
+    assert multi_turn_build._assistant_format_restrained(heading_stack_row)["passed"] is True
     assert multi_turn_build._assistant_format_restrained(emoji_row)["passed"] is False
 
 
@@ -686,6 +1818,10 @@ def test_reaction_reference_must_exist_in_visible_transcript() -> None:
 def test_review_pass_with_negative_words_still_passes_when_explicit() -> None:
     assert multi_turn_build._reviewer_passed("PASS - does not assert hidden facts and avoids contradiction") is True
     assert multi_turn_build._reviewer_passed("No unsupported assumptions introduced.") is True
+    assert multi_turn_build._reviewer_passed("No semantic oddities, contradictory premises, or unsupported references are present.") is True
+    assert multi_turn_build._reviewer_passed("No recovery situations were needed.") is True
+    assert multi_turn_build._reviewer_passed("The assistant does not fabricate the school's policy.") is True
+    assert multi_turn_build._reviewer_passed("The assistant introduces unsupported policy details.") is False
 
 
 def test_review_parser_accepts_pass_score_and_none_required_actions() -> None:
@@ -722,6 +1858,79 @@ def test_review_parser_accepts_pass_score_and_none_required_actions() -> None:
     assert review["review"]["turn_evidence_audit"]
     assert review["review"]["repair_actions"] == []
     assert all(reviewer["passed"] for reviewer in review["review"]["reviewers"])
+
+
+def test_review_parser_accepts_multiline_turn_evidence_audit() -> None:
+    seed_spec = {
+        "success_criteria": ["audit all turns"],
+        "difficulty_axis": "multiline audit",
+        "intent_trajectory_hint": "Problem Solving Interaction",
+    }
+    review = multi_turn_build._parse_review(
+        "\n".join(
+            [
+                "SELECTION: ACCEPT",
+                "SCORE: 0.96",
+                "INTENT_TRAJECTORY: Problem Solving Interaction",
+                "SUCCESS_CRITERIA:",
+                "- audit all turns: YES",
+                "TURN_EVIDENCE_AUDIT:",
+                "ASSISTANT 1: PASS; ASSISTANT 2: PASS",
+                "REVIEWER coherence: PASS",
+                "The dialogue is coherent.",
+                "REVIEWER naturalness: PASS",
+                "REVIEWER grounding: PASS",
+                "REVIEWER source_boundary: PASS",
+                "REVIEWER language_quality: PASS",
+                "REVIEWER recovery: PASS",
+                "REVIEWER outcome: PASS",
+                "REVIEWER format: PASS",
+                "REPAIR_ACTIONS: None",
+            ]
+        ),
+        seed_spec,
+        threshold=0.8,
+        expected_assistant_turns=2,
+    )
+
+    assert review["selection"]["accepted"] is True
+    assert "ASSISTANT 1: PASS" in review["review"]["turn_evidence_audit"]
+    assert review["review"]["reviewers"][0]["finding"] == "The dialogue is coherent."
+
+
+def test_preference_parser_accepts_space_label_for_rejected_answer() -> None:
+    parsed = multi_turn_build._parse_preference_pair(
+        "\n".join(
+            [
+                "FAILURE MODE: stale context",
+                "CHOSEN ACTION: revise from visible source",
+                "REJECTED ACTION: invent missing facts",
+                "REJECTED ANSWER:",
+                "Det betyder, at du bare kan bruge alle reglerne uden at tjekke kilden.",
+            ]
+        )
+    )
+
+    assert parsed["failure_mode"] == "stale context"
+    assert parsed["chosen_action"] == "revise from visible source"
+    assert parsed["rejected_action"] == "invent missing facts"
+    assert parsed["rejected_answer"] == "Det betyder, at du bare kan bruge alle reglerne uden at tjekke kilden."
+
+
+def test_preference_parser_uses_unlabeled_body_as_fallback_answer() -> None:
+    parsed = multi_turn_build._parse_preference_pair(
+        "\n".join(
+            [
+                "FAILURE_MODE: generic_answer",
+                "CHOSEN_ACTION: source-bounded final answer",
+                "REJECTED_ACTION: broad unsupported advice",
+                "Her er et generelt svar uden at bruge uddraget.",
+            ]
+        )
+    )
+
+    assert parsed["failure_mode"] == "generic_answer"
+    assert parsed["rejected_answer"] == "Her er et generelt svar uden at bruge uddraget."
 
 
 def test_review_parser_blocks_accept_when_any_reviewer_fails() -> None:
@@ -1110,20 +2319,33 @@ def test_multi_turn_dialogue_pack_end_to_end(tmp_path, monkeypatch) -> None:
 
     assert second.run_id == first.run_id
     assert first.pack == "multi_turn_dialogue"
-    assert set(first.artifacts) == {
+    assert {
         "blueprints",
         "candidates",
+        "candidate_assistant_turns",
+        "candidate_blueprints",
+        "candidate_final_rows",
+        "candidate_intent_models",
+        "candidate_messages",
+        "candidate_polished_messages",
+        "candidate_reviews",
+        "candidate_scenario_instances",
+        "candidate_skeletons",
+        "candidate_user_turns",
         "dataset",
         "intent_models",
         "preference_pairs",
         "rejected_candidates",
         "selection_report",
         "skeletons",
-    }
+    } <= set(first.artifacts)
 
     loaded = load(first.run_id)
     rows = read_jsonl(loaded.artifacts["dataset"].path)
     blueprints = read_jsonl(loaded.artifacts["blueprints"].path)
+    candidate_blueprints = read_jsonl(loaded.artifacts["candidate_blueprints"].path)
+    candidate_final_rows = read_jsonl(loaded.artifacts["candidate_final_rows"].path)
+    candidate_reviews = read_jsonl(loaded.artifacts["candidate_reviews"].path)
     candidates = read_jsonl(loaded.artifacts["candidates"].path)
     intent_models = read_jsonl(loaded.artifacts["intent_models"].path)
     rejected_candidates = read_jsonl(loaded.artifacts["rejected_candidates"].path)
@@ -1133,6 +2355,9 @@ def test_multi_turn_dialogue_pack_end_to_end(tmp_path, monkeypatch) -> None:
 
     assert len(rows) == cfg["generation"]["count"]
     assert len(candidates) == cfg["generation"]["count"] * cfg["generation"]["candidate_multiplier"]
+    assert len(candidate_blueprints) == len(candidates)
+    assert len(candidate_final_rows) == len(candidates)
+    assert len(candidate_reviews) == len(candidates)
     assert len(rejected_candidates) == len(candidates) - len(rows)
     assert len(blueprints) == len(rows)
     assert len(intent_models) == len(rows)

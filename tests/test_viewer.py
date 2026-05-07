@@ -11,7 +11,11 @@ from sdg.commons.viewer import (
     _discover_live_artifacts,
     _resolve_artifact_view,
     _slice_jsonl_rows_with_offsets,
+    _value_at_path,
     _viewer_item,
+)
+from sdg.packs.multi_turn_dialogue.viewer import (
+    viewer_spec as multi_turn_dialogue_viewer_spec,
 )
 from sdg.packs.verifiable_reasoning.viewer import (
     viewer_spec as verifiable_reasoning_viewer_spec,
@@ -64,6 +68,45 @@ def test_viewer_item_has_stable_item_and_section_keys() -> None:
     assert [section["key"] for section in item["sections"]] == ["prompt", "reasoning", "target"]
 
 
+def test_viewer_message_section_renders_chat_transcript() -> None:
+    row = {
+        "id": "dialogue-1",
+        "messages": [
+            {"role": "user", "content": "Hej"},
+            {"role": "assistant", "content": "Svar med <forsigtighed>."},
+        ],
+    }
+    view = _resolve_artifact_view(
+        [row],
+        {
+            "detail_sections": [
+                {"path": "messages", "label": "Conversation", "format": "messages"},
+            ]
+        },
+    )
+
+    item = _viewer_item(row, view)
+    section = item["sections"][0]
+
+    assert section["format"] == "messages"
+    assert section["text"] == "user: Hej\n\nassistant: Svar med <forsigtighed>."
+    assert 'data-role="user"' in section["html"]
+    assert "Svar med &lt;forsigtighed&gt;." in section["html"]
+
+
+def test_viewer_path_supports_message_indices() -> None:
+    row = {
+        "messages": [
+            {"role": "user", "content": "første"},
+            {"role": "assistant", "content": "sidste"},
+        ]
+    }
+
+    assert _value_at_path(row, "messages.0.content") == "første"
+    assert _value_at_path(row, "messages.last.content") == "sidste"
+    assert _value_at_path(row, "messages.2.content") is None
+
+
 def test_default_artifact_name_prefers_pack_viewer_order() -> None:
     artifacts = {
         "dataset": Artifact(name="dataset", path="/tmp/dataset.jsonl", kind="jsonl", meta={}),
@@ -111,3 +154,34 @@ def test_verifiable_reasoning_viewer_uses_short_titles_and_response_first() -> N
     assert item["subtitle"] == "zebra_logic"
     assert item["excerpt"] == "Svar: 1, 2, 3"
     assert item["sections"][0]["label"] == "Response"
+
+
+def test_multi_turn_dialogue_viewer_uses_conversation_first() -> None:
+    row = {
+        "id": "multi-turn-dialogue-candidate-00001",
+        "messages": [
+            {"role": "user", "content": "Kan du hjælpe?"},
+            {"role": "assistant", "content": "Ja."},
+        ],
+        "meta": {
+            "family": "general_chat",
+            "domain": "home_network_troubleshooting",
+            "intent_trajectory": "troubleshooting_interaction",
+        },
+        "hidden": {
+            "review": {"review_decision": "accept"},
+            "selection": {"accepted": True},
+        },
+        "sources": [],
+    }
+
+    view = _resolve_artifact_view([row], multi_turn_dialogue_viewer_spec()["artifacts"]["dataset"])
+    item = _viewer_item(row, view)
+
+    assert item["title"] == "multi-turn-dialogue-candidate-00001"
+    assert item["subtitle"] == "home_network_troubleshooting"
+    assert item["excerpt"] == "Kan du hjælpe?"
+    assert item["sections"][0]["label"] == "Conversation"
+    assert item["sections"][0]["format"] == "messages"
+    assert "assistant: Ja." in item["sections"][0]["text"]
+    assert "Final Assistant Turn" not in [section["label"] for section in item["sections"]]

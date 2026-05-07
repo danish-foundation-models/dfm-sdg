@@ -95,6 +95,58 @@ def test_direct_model_ref_resolves_without_endpoint_alias() -> None:
     assert client.api_key_env == "OPENAI_API_KEY"
 
 
+def test_endpoint_model_ref_accepts_extra_body(tmp_path) -> None:
+    env_path = tmp_path / ".env"
+    env_path.write_text(
+        "\n".join(
+            [
+                "SDG_ENDPOINT__DEEPSEEK__BASE_URL=https://api.deepseek.com",
+                "SDG_ENDPOINT__DEEPSEEK__DEFAULT_MODEL=deepseek-v4-pro",
+            ]
+        )
+    )
+
+    client = resolve_client(
+        {
+            "endpoint": "deepseek",
+            "extra_body": {"thinking": {"type": "disabled"}},
+        },
+        role="query_teacher",
+        env_path=env_path,
+    )
+
+    assert isinstance(client, LLM)
+    assert client.extra_body == {"thinking": {"type": "disabled"}}
+
+
+def test_llm_flattens_extra_body_into_chat_payload() -> None:
+    captured: dict[str, object] = {}
+
+    class CaptureTransport(httpx.BaseTransport):
+        def handle_request(self, request: httpx.Request) -> httpx.Response:
+            captured.update(json.loads(request.content))
+            return httpx.Response(
+                200,
+                json={"choices": [{"message": {"content": '{"target":"ok"}'}}]},
+                request=request,
+            )
+
+    llm = LLM(
+        model="deepseek-v4-pro",
+        base_url="https://api.deepseek.com",
+        extra_body={"thinking": {"type": "disabled"}},
+        transport=CaptureTransport(),
+    )
+
+    content = llm.chat([{"role": "user", "content": "hello"}], temperature=0.0)
+
+    assert content == '{"target":"ok"}'
+    assert captured["model"] == "deepseek-v4-pro"
+    assert captured["temperature"] == 0.0
+    assert captured["thinking"] == {"type": "disabled"}
+    assert "extra_body" not in captured
+
+
 def test_direct_model_ref_preserves_explicit_null_api_key_env() -> None:
     client = resolve_client(
         {
@@ -205,6 +257,19 @@ def test_async_chat_retries_after_rate_limit() -> None:
     content = asyncio.run(llm.achat([{"role": "user", "content": "hello"}], temperature=0.0))
     assert content == '{"target":"ok"}'
     assert calls["count"] == 2
+
+
+def test_retry_after_header_is_not_capped_by_fallback_backoff() -> None:
+    runtime = model_module.EndpointRuntime(
+        max_concurrency=1,
+        max_retries=1,
+        min_backoff_seconds=1.0,
+        max_backoff_seconds=60.0,
+        timeout_seconds=120.0,
+    )
+
+    assert runtime.retry_delay(httpx.Headers({"retry-after": "120"}), attempt=0) == 120.0
+    assert runtime.retry_delay(httpx.Headers(), attempt=10) == 60.0
 
 
 def test_async_chat_respects_shared_semaphore_limit() -> None:

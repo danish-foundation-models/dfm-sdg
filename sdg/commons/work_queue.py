@@ -113,6 +113,7 @@ async def _map_async[Item, Result](
         asyncio.create_task(_run_worker(worker, pending, completed))
         for _ in range(worker_count)
     ]
+    active_workers = list(workers)
 
     next_index = 0
     completed_count = 0
@@ -123,15 +124,16 @@ async def _map_async[Item, Result](
         while finished_workers < worker_count:
             wait_for_completed = asyncio.create_task(completed.get())
             done, _ = await asyncio.wait(
-                {wait_for_completed, *workers},
+                {wait_for_completed, *active_workers},
                 return_when=asyncio.FIRST_COMPLETED,
             )
 
-            worker_error = _unexpected_worker_error(workers, done)
+            worker_error = _unexpected_worker_error(active_workers, done)
             if worker_error is not None:
                 wait_for_completed.cancel()
                 await asyncio.gather(wait_for_completed, return_exceptions=True)
                 raise worker_error
+            active_workers = [worker for worker in active_workers if worker not in done]
 
             if wait_for_completed not in done:
                 wait_for_completed.cancel()

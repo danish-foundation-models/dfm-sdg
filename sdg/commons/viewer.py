@@ -621,12 +621,13 @@ def _viewer_item(row: dict[str, Any], view: dict[str, Any]) -> dict[str, Any]:
         value = _value_at_path(row, section_spec["path"])
         if value in (None, "", [], {}):
             continue
+        format_name = _section_format(section_spec, value)
         sections.append(
             {
                 "key": section_spec["path"],
                 "label": section_spec["label"],
-                "text": _stringify(value, pretty=True),
-                "format": _section_format(section_spec, value),
+                "text": _section_text(format_name, value),
+                "format": format_name,
                 "html": _section_html(section_spec, value),
             }
         )
@@ -697,9 +698,21 @@ def _filter_payloads(items: list[dict[str, Any]], filter_specs: list[dict[str, s
 def _value_at_path(row: dict[str, Any], path: str) -> Any:
     current: Any = row
     for part in path.split("."):
-        if not isinstance(current, dict) or part not in current:
-            return None
-        current = current[part]
+        if isinstance(current, dict) and part in current:
+            current = current[part]
+            continue
+        if isinstance(current, list):
+            if part == "last":
+                index = len(current) - 1
+            elif part.isdigit():
+                index = int(part)
+            else:
+                return None
+            if index < 0 or index >= len(current):
+                return None
+            current = current[index]
+            continue
+        return None
     return current
 
 
@@ -793,11 +806,57 @@ def _section_format(section_spec: dict[str, str], value: Any) -> str:
     return "plain"
 
 
+def _section_text(format_name: str, value: Any) -> str:
+    if format_name == "messages":
+        return _messages_text(value)
+    return _stringify(value, pretty=True)
+
+
 def _section_html(section_spec: dict[str, str], value: Any) -> str:
-    if _section_format(section_spec, value) != "markdown":
+    format_name = _section_format(section_spec, value)
+    if format_name == "messages":
+        return _messages_html(value)
+    if format_name == "markdown":
+        text = _stringify(value, pretty=True)
+        return markdown(escape(text), extensions=["extra", "sane_lists", "nl2br"])
+    return ""
+
+
+def _messages_text(value: Any) -> str:
+    if not isinstance(value, list):
+        return _stringify(value, pretty=True)
+
+    lines = []
+    for index, message in enumerate(value, start=1):
+        role, content = _message_parts(message, index)
+        lines.append(f"{role}: {content}")
+    return "\n\n".join(lines)
+
+
+def _messages_html(value: Any) -> str:
+    if not isinstance(value, list):
         return ""
-    text = _stringify(value, pretty=True)
-    return markdown(escape(text), extensions=["extra", "sane_lists", "nl2br"])
+
+    parts = []
+    for index, message in enumerate(value, start=1):
+        role, content = _message_parts(message, index)
+        role_class = role if role in {"system", "user", "assistant", "tool"} else "other"
+        parts.append(
+            '<div class="message" data-role="'
+            f'{escape(role_class)}">'
+            f'<div class="message-role">{escape(role)}</div>'
+            f'<div class="message-content">{escape(content)}</div>'
+            "</div>"
+        )
+    return "".join(parts)
+
+
+def _message_parts(message: Any, index: int) -> tuple[str, str]:
+    if not isinstance(message, dict):
+        return f"message {index}", _stringify(message, pretty=True)
+    role = _single_line(str(message.get("role") or f"message {index}"))
+    content = str(message.get("content") or "")
+    return role, content
 
 
 def _default_search_fields(
@@ -1319,6 +1378,37 @@ def _server_viewer_html(payload: dict[str, Any]) -> str:
       font-size: 0.84rem;
       line-height: 1.55;
     }}
+    .message-thread {{
+      display: grid;
+      gap: 0.55rem;
+      padding: 0.62rem;
+      background: #fbfcff;
+    }}
+    .message {{
+      display: grid;
+      grid-template-columns: 5rem minmax(0, 1fr);
+      gap: 0.55rem;
+      align-items: start;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 0.5rem;
+      background: #fff;
+    }}
+    .message-role {{
+      color: var(--muted);
+      font-size: 0.68rem;
+      font-weight: 700;
+      text-transform: uppercase;
+    }}
+    .message[data-role="user"] .message-role {{ color: var(--accent); }}
+    .message[data-role="assistant"] .message-role {{ color: #256c3b; }}
+    .message-content {{
+      white-space: pre-wrap;
+      word-break: break-word;
+      overflow-wrap: anywhere;
+      font-size: 0.84rem;
+      line-height: 1.55;
+    }}
     .section-markdown {{
       padding: 0.62rem;
       font-size: 0.84rem;
@@ -1804,6 +1894,9 @@ def _server_viewer_html(payload: dict[str, Any]) -> str:
       if (section.label === "Target") {{
         return false;
       }}
+      if (section.format === "messages") {{
+        return false;
+      }}
       const heavyLabels = new Set(["Messages", "Sources", "Scores", "Checks", "Meta", "Generation Filter", "Hidden"]);
       if (heavyLabels.has(section.label)) {{
         return true;
@@ -1816,6 +1909,14 @@ def _server_viewer_html(payload: dict[str, Any]) -> str:
     }}
 
     function appendSectionBody(block, section) {{
+      if (section.format === "messages" && section.html) {{
+        const body = document.createElement("div");
+        body.className = "message-thread";
+        body.innerHTML = section.html;
+        block.appendChild(body);
+        return;
+      }}
+
       if (section.format === "markdown" && section.html) {{
         const body = document.createElement("div");
         body.className = "section-markdown";
@@ -2332,6 +2433,37 @@ def _viewer_html(payload: dict[str, Any]) -> str:
       font-size: 0.84rem;
       line-height: 1.55;
     }}
+    .message-thread {{
+      display: grid;
+      gap: 0.55rem;
+      padding: 0.62rem;
+      background: #fbfcff;
+    }}
+    .message {{
+      display: grid;
+      grid-template-columns: 5rem minmax(0, 1fr);
+      gap: 0.55rem;
+      align-items: start;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 0.5rem;
+      background: #fff;
+    }}
+    .message-role {{
+      color: var(--muted);
+      font-size: 0.68rem;
+      font-weight: 700;
+      text-transform: uppercase;
+    }}
+    .message[data-role="user"] .message-role {{ color: var(--accent); }}
+    .message[data-role="assistant"] .message-role {{ color: #256c3b; }}
+    .message-content {{
+      white-space: pre-wrap;
+      word-break: break-word;
+      overflow-wrap: anywhere;
+      font-size: 0.84rem;
+      line-height: 1.55;
+    }}
     .section-markdown {{
       padding: 0.62rem;
       font-size: 0.84rem;
@@ -2678,6 +2810,9 @@ def _viewer_html(payload: dict[str, Any]) -> str:
       if (section.label === "Target") {{
         return false;
       }}
+      if (section.format === "messages") {{
+        return false;
+      }}
       const heavyLabels = new Set(["Messages", "Sources", "Scores", "Checks", "Meta", "Generation Filter", "Hidden"]);
       if (heavyLabels.has(section.label)) {{
         return true;
@@ -2686,6 +2821,14 @@ def _viewer_html(payload: dict[str, Any]) -> str:
     }}
 
     function appendSectionBody(block, section) {{
+      if (section.format === "messages" && section.html) {{
+        const body = document.createElement("div");
+        body.className = "message-thread";
+        body.innerHTML = section.html;
+        block.appendChild(body);
+        return;
+      }}
+
       if (section.format === "markdown" && section.html) {{
         const body = document.createElement("div");
         body.className = "section-markdown";

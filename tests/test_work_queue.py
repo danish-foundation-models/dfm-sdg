@@ -75,6 +75,19 @@ def test_map_async_unordered_yields_completed_results_immediately() -> None:
     assert asyncio.run(run()) == [10, 0]
 
 
+def test_map_async_unordered_drains_results_after_workers_finish() -> None:
+    async def run() -> list[int]:
+        async def worker(index: int, item: int) -> int:
+            return item
+
+        rows: list[int] = []
+        async for row in map_async_unordered(range(32), worker, concurrency=8):
+            rows.append(row)
+        return rows
+
+    assert sorted(asyncio.run(asyncio.wait_for(run(), timeout=1))) == list(range(32))
+
+
 def test_map_async_unordered_raises_when_worker_is_cancelled() -> None:
     async def run() -> None:
         async def worker(index: int, item: int) -> int:

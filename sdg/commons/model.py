@@ -25,6 +25,7 @@ class EndpointModelRef(TypedDict):
     model: NotRequired[str]
     api_key: NotRequired[str]
     api_key_env: NotRequired[str | None]
+    extra_body: NotRequired[dict[str, Any]]
     max_concurrency: NotRequired[int]
     max_retries: NotRequired[int]
     min_backoff_seconds: NotRequired[float]
@@ -38,6 +39,7 @@ class DirectModelRef(TypedDict):
     type: NotRequired[ModelKind]
     api_key: NotRequired[str]
     api_key_env: NotRequired[str | None]
+    extra_body: NotRequired[dict[str, Any]]
     max_concurrency: NotRequired[int]
     max_retries: NotRequired[int]
     min_backoff_seconds: NotRequired[float]
@@ -52,6 +54,7 @@ class ClientSpec:
     base_url: str
     api_key: str | None
     api_key_env: str | None
+    extra_body: dict[str, Any]
     max_concurrency: int
     max_retries: int
     min_backoff_seconds: float
@@ -145,8 +148,7 @@ class EndpointRuntime:
     def retry_delay(self, headers: httpx.Headers, *, attempt: int) -> float:
         header_delay = _header_backoff_seconds(headers)
         if header_delay is not None:
-            bounded = max(header_delay, self.min_backoff_seconds)
-            return min(bounded, self.max_backoff_seconds)
+            return max(header_delay, self.min_backoff_seconds)
 
         exponential = self.min_backoff_seconds * (2 ** attempt)
         return min(exponential, self.max_backoff_seconds)
@@ -170,6 +172,7 @@ class EndpointClient:
         base_url: str,
         api_key_env: str | None = "OPENAI_API_KEY",
         api_key: str | None = None,
+        extra_body: dict[str, Any] | None = None,
         *,
         max_concurrency: int = 4,
         max_retries: int = 4,
@@ -183,6 +186,7 @@ class EndpointClient:
         self.base_url = base_url.rstrip("/")
         self.api_key_env = api_key_env
         self.api_key = api_key
+        self.extra_body = dict(extra_body or {})
         self.transport = transport
         self.async_transport = async_transport
         self.runtime = _get_runtime(
@@ -260,24 +264,35 @@ class EndpointClient:
 
 class LLM(EndpointClient):
     def complete(self, prompt: str, **gen: Any) -> str:
-        payload = {"model": self.model, "prompt": prompt, **gen}
+        payload = self._payload_with_extra_body({"model": self.model, "prompt": prompt, **gen})
         data = self._post_json("/completions", payload)
         return data["choices"][0]["text"]
 
     async def acomplete(self, prompt: str, **gen: Any) -> str:
-        payload = {"model": self.model, "prompt": prompt, **gen}
+        payload = self._payload_with_extra_body({"model": self.model, "prompt": prompt, **gen})
         data = await self._apost_json("/completions", payload)
         return data["choices"][0]["text"]
 
     def chat(self, messages: list[dict[str, Any]], **gen: Any) -> Any:
-        payload = {"model": self.model, "messages": messages, **gen}
+        payload = self._payload_with_extra_body({"model": self.model, "messages": messages, **gen})
         data = self._post_json("/chat/completions", payload)
         return data["choices"][0]["message"]["content"]
 
     async def achat(self, messages: list[dict[str, Any]], **gen: Any) -> Any:
-        payload = {"model": self.model, "messages": messages, **gen}
+        payload = self._payload_with_extra_body({"model": self.model, "messages": messages, **gen})
         data = await self._apost_json("/chat/completions", payload)
         return data["choices"][0]["message"]["content"]
+
+    def _payload_with_extra_body(self, payload: dict[str, Any]) -> dict[str, Any]:
+        call_extra_body = payload.pop("extra_body", None)
+        extra_body = dict(self.extra_body)
+        if call_extra_body is not None:
+            assert isinstance(call_extra_body, dict), "extra_body must be a mapping"
+            extra_body.update(call_extra_body)
+
+        collisions = sorted(set(payload) & set(extra_body))
+        assert not collisions, f"extra_body cannot override request fields: {', '.join(collisions)}"
+        return {**payload, **extra_body}
 
 
 class Embedder(EndpointClient):
@@ -392,6 +407,7 @@ def build_client(spec: ClientSpec) -> LLM | Embedder | Reranker:
         "base_url": spec.base_url,
         "api_key_env": spec.api_key_env,
         "api_key": spec.api_key,
+        "extra_body": spec.extra_body,
         "max_concurrency": spec.max_concurrency,
         "max_retries": spec.max_retries,
         "min_backoff_seconds": spec.min_backoff_seconds,
@@ -425,6 +441,7 @@ _ENDPOINT_MODEL_REF_KEYS = {
     "model",
     "api_key",
     "api_key_env",
+    "extra_body",
     "max_concurrency",
     "max_retries",
     "min_backoff_seconds",
@@ -438,6 +455,7 @@ _DIRECT_MODEL_REF_KEYS = {
     "type",
     "api_key",
     "api_key_env",
+    "extra_body",
     "max_concurrency",
     "max_retries",
     "min_backoff_seconds",
@@ -475,6 +493,7 @@ def _client_spec_from_endpoint_alias(
         base_url=endpoint.base_url,
         api_key=endpoint.api_key,
         api_key_env=endpoint.api_key_env,
+        extra_body={},
         max_concurrency=endpoint.max_concurrency,
         max_retries=endpoint.max_retries,
         min_backoff_seconds=endpoint.min_backoff_seconds,
@@ -519,6 +538,7 @@ def _resolve_endpoint_model_ref(
         base_url=endpoint.base_url,
         api_key=api_key,
         api_key_env=api_key_env,
+        extra_body=_extra_body_override(model_ref, label=f"{label} extra_body"),
         max_concurrency=_int_override(
             model_ref,
             "max_concurrency",
@@ -572,6 +592,7 @@ def _resolve_direct_model_ref(
             label=f"{label} api_key_env",
             default="OPENAI_API_KEY",
         ),
+        extra_body=_extra_body_override(model_ref, label=f"{label} extra_body"),
         max_concurrency=_int_override(
             model_ref,
             "max_concurrency",
@@ -612,6 +633,7 @@ def _client_spec(
     base_url: str,
     api_key: str | None,
     api_key_env: str | None,
+    extra_body: dict[str, Any],
     max_concurrency: int,
     max_retries: int,
     min_backoff_seconds: float,
@@ -624,6 +646,7 @@ def _client_spec(
         base_url=base_url,
         api_key=api_key,
         api_key_env=api_key_env,
+        extra_body=extra_body,
         max_concurrency=max_concurrency,
         max_retries=max_retries,
         min_backoff_seconds=min_backoff_seconds,
@@ -708,6 +731,15 @@ def _float_override(
     value = model_ref[key]
     assert isinstance(value, (int, float)) and not isinstance(value, bool), f"{label} must be a number"
     return float(value)
+
+
+def _extra_body_override(model_ref: dict[str, object], *, label: str) -> dict[str, Any]:
+    if "extra_body" not in model_ref:
+        return {}
+    value = model_ref["extra_body"]
+    assert isinstance(value, dict), f"{label} must be a mapping"
+    assert all(isinstance(key, str) and key for key in value), f"{label} keys must be non-empty strings"
+    return dict(value)
 
 
 def _post_json(
